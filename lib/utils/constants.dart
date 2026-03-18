@@ -12,19 +12,19 @@ class BleConstants {
 
   /// BLE 服务 UUID
   static final Guid serviceUuid =
-  Guid('4fafc201-1fb5-459e-8fcc-c5c9c331914b');
+      Guid('4fafc201-1fb5-459e-8fcc-c5c9c331914b');
 
   /// 控制特征 UUID (App → 火车，Write + WriteWithoutResponse)
   static final Guid controlCharUuid =
-  Guid('beb5483e-36e1-4688-b7f5-ea07361b26a8');
+      Guid('beb5483e-36e1-4688-b7f5-ea07361b26a8');
 
   /// 状态特征 UUID (火车 → App，Read + Notify)
   static final Guid statusCharUuid =
-  Guid('8c224e70-1b0a-4f66-b4c3-16e4c2e70391');
+      Guid('8c224e70-1b0a-4f66-b4c3-16e4c2e70391');
 
   /// 版本特征 UUID (只读)
   static final Guid versionCharUuid =
-  Guid('8c224e70-1b0a-4f66-b4c3-16e4c2e70394');
+      Guid('8c224e70-1b0a-4f66-b4c3-16e4c2e70394');
 
   /// 状态上报间隔（约200ms）
   static const int statusIntervalMs = 200;
