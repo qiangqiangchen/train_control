@@ -193,7 +193,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
   Widget _rightPanel() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      // 【修改点】增加了 bottom 的数值 (从 12 改为 42)，将整个推杆模块向上顶起，避开全面屏手势区
+      padding: const EdgeInsets.only(left: 8, right: 8, top: 12, bottom: 42),
       child: Row(
         children: [
           const Expanded(flex: 5, child: ThrottleLever()),
@@ -205,8 +206,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       ),
     );
   }
-
-  Widget _notchLabels() {
+  
+ Widget _notchLabels() {
     return Column(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: List.generate(9, (i) {
@@ -219,15 +220,18 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 : TrainTheme.glowRed;
         if (!show) return const Expanded(child: SizedBox());
         return Expanded(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text('N', style: TrainTheme.rajdhaniStyle(fontSize: 7, color: color)),
-              Text('$notch', style: TrainTheme.rajdhaniStyle(
-                fontSize: 14, fontWeight: FontWeight.w900, color: color,
-                shadows: [Shadow(color: color.withOpacity(0.5), blurRadius: 4)],
-              )),
-            ],
+          child: FittedBox( // 【新增】FittedBox 防止刻度文本微小越界
+            fit: BoxFit.scaleDown,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text('N', style: TrainTheme.rajdhaniStyle(fontSize: 7, color: color)),
+                Text('$notch', style: TrainTheme.rajdhaniStyle(
+                  fontSize: 14, fontWeight: FontWeight.w900, color: color,
+                  shadows: [Shadow(color: color.withOpacity(0.5), blurRadius: 4)],
+                )),
+              ],
+            ),
           ),
         );
       }),

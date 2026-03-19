@@ -17,6 +17,10 @@ class _ThrottleLeverState extends ConsumerState<ThrottleLever> {
   int _notch = 0;
   bool _dragging = false;
 
+   // 【新增参数】重新定义上下缓冲空间，防止推杆滑块溢出背景轨道
+  static const double _topPad = 20.0;
+  static const double _btmPad = 38.0; 
+
   @override
   Widget build(BuildContext context) {
     final ts = ref.watch(trainStateProvider);
@@ -26,7 +30,8 @@ class _ThrottleLeverState extends ConsumerState<ThrottleLever> {
 
     return LayoutBuilder(builder: (_, box) {
       final h = box.maxHeight;
-      final slotH = h - 30;
+      // 重新计算可滑动的轨道高度
+      final slotH = h - _topPad - _btmPad;
       final step = slotH / BleConstants.maxNotch;
       final handleY = slotH - (_notch * step);
 
@@ -41,7 +46,7 @@ class _ThrottleLeverState extends ConsumerState<ThrottleLever> {
           clipBehavior: Clip.none,
           children: [
             Positioned(
-              left: 0, right: 0, top: 15, bottom: 15,
+              left: 0, right: 0, top: _topPad, bottom: _btmPad,
               child: Center(
                 child: Container(
                   width: 30,
@@ -50,56 +55,44 @@ class _ThrottleLeverState extends ConsumerState<ThrottleLever> {
                     borderRadius: BorderRadius.circular(15),
                     boxShadow: [
                       const BoxShadow(color: Colors.black, blurRadius: 8),
-                      BoxShadow(
-                          color: const Color(0xFF333333), spreadRadius: 1.5),
+                      BoxShadow(color: const Color(0xFF333333), spreadRadius: 1.5),
                     ],
                   ),
                 ),
               ),
             ),
             Positioned(
-              left: 3, top: 15, bottom: 15,
+              left: 3, top: _topPad, bottom: _btmPad,
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: List.generate(
                     9,
                     (_) => Container(
-                          width: 10,
-                          height: 5,
+                          width: 10, height: 5,
                           decoration: BoxDecoration(
                             color: TrainTheme.metalDark,
-                            borderRadius: const BorderRadius.horizontal(
-                                left: Radius.circular(2)),
+                            borderRadius: const BorderRadius.horizontal(left: Radius.circular(2)),
                           ),
                         )).reversed.toList(),
               ),
             ),
             Positioned.fill(
               child: GestureDetector(
-                onVerticalDragStart: (slave || stopped)
-                    ? null
-                    : (_) => _dragging = true,
-                onVerticalDragUpdate: (slave || stopped)
-                    ? null
-                    : (d) => _onDrag(d, h),
-                onVerticalDragEnd: (slave || stopped)
-                    ? null
-                    : (_) {
-                        _dragging = false;
-                        ref
-                            .read(trainStateProvider.notifier)
-                            .setNotchFinal(_notch);
-                      },
-                onTapUp: (slave || stopped)
-                    ? null
-                    : (d) => _onTap(d.localPosition.dy, h),
+                onVerticalDragStart: (slave || stopped) ? null : (_) => _dragging = true,
+                onVerticalDragUpdate: (slave || stopped) ? null : (d) => _onDrag(d, h),
+                onVerticalDragEnd: (slave || stopped) ? null : (_) {
+                  _dragging = false;
+                  ref.read(trainStateProvider.notifier).setNotchFinal(_notch);
+                },
+                onTapUp: (slave || stopped) ? null : (d) => _onTap(d.localPosition.dy, h),
                 behavior: HitTestBehavior.opaque,
               ),
             ),
             Positioned(
               left: -18,
               right: -18,
-              top: 15 + handleY - 16,
+              // 校准滑块指示中心，减去上半部分柄的高度(16)
+              top: _topPad + handleY - 16,
               child: IgnorePointer(child: _buildHandle()),
             ),
           ],
@@ -109,8 +102,8 @@ class _ThrottleLeverState extends ConsumerState<ThrottleLever> {
   }
 
   void _onDrag(DragUpdateDetails d, double h) {
-    final slotH = h - 30;
-    final ry = d.localPosition.dy - 15;
+    final slotH = h - _topPad - _btmPad;
+    final ry = d.localPosition.dy - _topPad; // 校准手指坐标
     final n = ((1 - ry / slotH) * BleConstants.maxNotch)
         .round()
         .clamp(0, BleConstants.maxNotch);
@@ -122,8 +115,8 @@ class _ThrottleLeverState extends ConsumerState<ThrottleLever> {
   }
 
   void _onTap(double y, double h) {
-    final slotH = h - 30;
-    final ry = y - 15;
+    final slotH = h - _topPad - _btmPad;
+    final ry = y - _topPad; // 校准手指坐标
     final n = ((1 - ry / slotH) * BleConstants.maxNotch)
         .round()
         .clamp(0, BleConstants.maxNotch);

@@ -1,3 +1,4 @@
+// 覆盖: lib/widgets/mu_monitor.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -55,9 +56,12 @@ class _MuMonitorState extends ConsumerState<MuMonitor>
         child: Stack(
           children: [
             Positioned.fill(child: CustomPaint(painter: _CrtPainter())),
-            Padding(
-              padding: const EdgeInsets.all(8),
-              child: slave ? _slaveView(ts) : _masterView(ts, n, master),
+            // 【修改点】使用 Positioned.fill 强制内部内容遵循最大高度约束
+            Positioned.fill(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                child: slave ? _slaveView(ts) : _masterView(ts, n, master),
+              ),
             ),
             if (ts.slaveWarning && master) _warnOverlay(),
           ],
@@ -68,66 +72,43 @@ class _MuMonitorState extends ConsumerState<MuMonitor>
 
   Widget _masterView(TrainState ts, TrainStateNotifier n, bool active) {
     return Column(
-      mainAxisSize: MainAxisSize.min,
+      mainAxisSize: MainAxisSize.max, // 【修改点】占据最大高度
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              '🔗 补机: ${active ? "连接(${ts.slaveCab == CabEnd.a ? 'A' : 'B'}端)" : "未连接"}',
-              style: _ms(11),
-            ),
-            if (active)
-              Text(
-                '🔋 ${ts.slaveBattery ?? 0}% ${ts.slaveBatteryVoltage?.toStringAsFixed(2) ?? "0.00"}V',
-                style: _ms(10),
-              ),
+            Text('🔗 补机: ${active ? "连接(${ts.slaveCab == CabEnd.a ? 'A' : 'B'}端)" : "未连接"}', style: _ms(12)),
+            if (active) Text('🔋 ${ts.slaveBattery ?? 0}% ${ts.slaveBatteryVoltage?.toStringAsFixed(2) ?? "0.00"}V', style: _ms(11)),
           ],
         ),
-        const SizedBox(height: 5),
+        const Spacer(), // 【修改点】用弹性的 Spacer 替代 SizedBox
         Row(
           children: [
-            Text('PWM:', style: _ms(10)),
+            Text('PWM:', style: _ms(12)),
             const SizedBox(width: 4),
-            Expanded(
-                child: _SpeedBar(
-                    value: active
-                        ? (ts.slaveActualPwm ?? 0) / 255.0
-                        : 0)),
-            const SizedBox(width: 4),
-            Text(
-              active ? '${ts.slaveActualPwm ?? 0}/${ts.targetPwm}' : '0/0',
-              style: _ms(11),
-            ),
+            Expanded(child: _SpeedBar(value: active ? (ts.slaveActualPwm ?? 0) / 255.0 : 0)),
+            const SizedBox(width: 6),
+            Text(active ? '${ts.slaveActualPwm ?? 0}/${ts.targetPwm}' : '0/0', style: _ms(12)),
           ],
         ),
-        const SizedBox(height: 5),
+        const Spacer(), // 【修改点】用弹性的 Spacer 替代 SizedBox
         Row(
           children: [
-            Text('系数: ${(ts.speedCoefficient ?? 1.0).toStringAsFixed(2)}',
-                style: _ms(10)),
+            Text('系数: ${(ts.speedCoefficient ?? 1.0).toStringAsFixed(2)}', style: _ms(12)),
             const Spacer(),
             _MuBtn(
                 label: '◀',
-                onTap: active
-                    ? () {
-                        n.setSpeedCoefficient(
-                            (ts.speedCoefficient ?? 1.0) -
-                                BleConstants.coefficientStep);
+                onTap: active ? () {
+                        n.setSpeedCoefficient((ts.speedCoefficient ?? 1.0) - BleConstants.coefficientStep);
                         HapticFeedback.selectionClick();
-                      }
-                    : null),
+                      } : null),
             const SizedBox(width: 3),
             _MuBtn(
                 label: '▶',
-                onTap: active
-                    ? () {
-                        n.setSpeedCoefficient(
-                            (ts.speedCoefficient ?? 1.0) +
-                                BleConstants.coefficientStep);
+                onTap: active ? () {
+                        n.setSpeedCoefficient((ts.speedCoefficient ?? 1.0) + BleConstants.coefficientStep);
                         HapticFeedback.selectionClick();
-                      }
-                    : null),
+                      } : null),
             const SizedBox(width: 6),
             Expanded(
               flex: 2,
@@ -139,21 +120,14 @@ class _MuMonitorState extends ConsumerState<MuMonitor>
                     activeTrackColor: TrainTheme.muGlow,
                     inactiveTrackColor: TrainTheme.metalDark,
                     thumbColor: TrainTheme.muGlow,
-                    thumbShape:
-                        const RoundSliderThumbShape(enabledThumbRadius: 5),
+                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
                     overlayColor: TrainTheme.muGlow.withOpacity(0.2),
-                    overlayShape:
-                        const RoundSliderOverlayShape(overlayRadius: 10),
+                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
                   ),
                   child: Slider(
-                    value: (ts.speedCoefficient ?? 1.0).clamp(
-                        BleConstants.minCoefficient,
-                        BleConstants.maxCoefficient),
-                    min: BleConstants.minCoefficient,
-                    max: BleConstants.maxCoefficient,
-                    divisions: 20,
-                    onChanged:
-                        active ? (v) => n.setSpeedCoefficient(v) : null,
+                    value: (ts.speedCoefficient ?? 1.0).clamp(BleConstants.minCoefficient, BleConstants.maxCoefficient),
+                    min: BleConstants.minCoefficient, max: BleConstants.maxCoefficient, divisions: 20,
+                    onChanged: active ? (v) => n.setSpeedCoefficient(v) : null,
                   ),
                 ),
               ),
@@ -169,12 +143,10 @@ class _MuMonitorState extends ConsumerState<MuMonitor>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('🔗 补机模式', style: _ms(13)),
+          Text('🔗 补机模式', style: _ms(14)),
           const SizedBox(height: 3),
-          Text(
-            'LV:${ts.level} PWM:${ts.actualPwm} HL:${ts.headlight ? "ON" : "OFF"}',
-            style: _ms(9).copyWith(color: TrainTheme.muGlow.withOpacity(0.5)),
-          ),
+          Text('LV:${ts.level} PWM:${ts.actualPwm} HL:${ts.headlight ? "ON" : "OFF"}',
+            style: _ms(10).copyWith(color: TrainTheme.muGlow.withOpacity(0.7))),
         ],
       ),
     );
@@ -186,26 +158,17 @@ class _MuMonitorState extends ConsumerState<MuMonitor>
       builder: (_, __) => Positioned.fill(
         child: Container(
           decoration: BoxDecoration(
-            color: Color.lerp(
-                const Color(0xE6320000), const Color(0xD9140000), _warn.value),
+            color: Color.lerp(const Color(0xE6320000), const Color(0xD9140000), _warn.value),
             borderRadius: BorderRadius.circular(5),
             border: Border.all(color: const Color(0xFFFF3333), width: 1.5),
           ),
           child: Center(
             child: Opacity(
               opacity: 0.6 + 0.4 * _warn.value,
-              child: Text(
-                '⚠ 补机通信异常',
-                style: TrainTheme.orbitronStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w900,
-                  color: const Color(0xFFFF3333),
-                  letterSpacing: 1,
-                  shadows: [
-                    const Shadow(color: Color(0xFFFF3333), blurRadius: 10)
-                  ],
-                ),
-              ),
+              child: Text('⚠ 补机通信异常', style: TrainTheme.orbitronStyle(
+                  fontSize: 14, fontWeight: FontWeight.w900, color: const Color(0xFFFF3333),
+                  letterSpacing: 1, shadows: [const Shadow(color: Color(0xFFFF3333), blurRadius: 10)],
+              )),
             ),
           ),
         ),
@@ -214,11 +177,9 @@ class _MuMonitorState extends ConsumerState<MuMonitor>
   }
 
   TextStyle _ms(double sz) => TrainTheme.orbitronStyle(
-        fontSize: sz,
-        color: TrainTheme.muGlow,
-        shadows: [
-          Shadow(color: TrainTheme.muGlow.withOpacity(0.5), blurRadius: 4)
-        ],
+        fontSize: sz, fontWeight: FontWeight.w700,
+        color: Colors.white.withOpacity(0.9),
+        shadows: [Shadow(color: TrainTheme.muGlow, blurRadius: 6)],
       );
 }
 
@@ -226,11 +187,8 @@ class _CrtPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final p = Paint()..color = Colors.black.withOpacity(0.12);
-    for (double y = 0; y < size.height; y += 2) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), p);
-    }
+    for (double y = 0; y < size.height; y += 2) { canvas.drawLine(Offset(0, y), Offset(size.width, y), p); }
   }
-
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
@@ -238,27 +196,15 @@ class _CrtPainter extends CustomPainter {
 class _SpeedBar extends StatelessWidget {
   final double value;
   const _SpeedBar({required this.value});
-
   @override
   Widget build(BuildContext context) {
     return Container(
       height: 8,
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(2),
-        border: Border.all(color: TrainTheme.metalDark),
-      ),
+      decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(2), border: Border.all(color: TrainTheme.metalDark)),
       child: FractionallySizedBox(
-        alignment: Alignment.centerLeft,
-        widthFactor: value.clamp(0.0, 1.0),
+        alignment: Alignment.centerLeft, widthFactor: value.clamp(0.0, 1.0),
         child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(1),
-            boxShadow: [
-              BoxShadow(
-                  color: TrainTheme.muGlow.withOpacity(0.5), blurRadius: 5)
-            ],
-          ),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(1), boxShadow: [BoxShadow(color: TrainTheme.muGlow.withOpacity(0.5), blurRadius: 5)]),
           child: CustomPaint(painter: _StripePainter()),
         ),
       ),
@@ -269,22 +215,12 @@ class _SpeedBar extends StatelessWidget {
 class _StripePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size s) {
-    canvas.drawRect(
-        Rect.fromLTWH(0, 0, s.width, s.height), Paint()..color = TrainTheme.muGlow);
+    canvas.drawRect(Rect.fromLTWH(0, 0, s.width, s.height), Paint()..color = TrainTheme.muGlow);
     final sp = Paint()..color = const Color(0xFF0A8A56);
     for (double x = -s.height; x < s.width + s.height; x += 10) {
-      canvas.drawPath(
-        Path()
-          ..moveTo(x, s.height)
-          ..lineTo(x + 5, s.height)
-          ..lineTo(x + 5 + s.height, 0)
-          ..lineTo(x + s.height, 0)
-          ..close(),
-        sp,
-      );
+      canvas.drawPath(Path()..moveTo(x, s.height)..lineTo(x + 5, s.height)..lineTo(x + 5 + s.height, 0)..lineTo(x + s.height, 0)..close(), sp);
     }
   }
-
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
@@ -293,44 +229,22 @@ class _MuBtn extends StatefulWidget {
   final String label;
   final VoidCallback? onTap;
   const _MuBtn({required this.label, this.onTap});
-
   @override
   State<_MuBtn> createState() => _MuBtnState();
 }
 
 class _MuBtnState extends State<_MuBtn> {
   bool _p = false;
-
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTapDown: widget.onTap != null
-          ? (_) => setState(() => _p = true)
-          : null,
-      onTapUp: widget.onTap != null
-          ? (_) {
-              setState(() => _p = false);
-              widget.onTap!();
-            }
-          : null,
-      onTapCancel: widget.onTap != null
-          ? () => setState(() => _p = false)
-          : null,
+      onTapDown: widget.onTap != null ? (_) => setState(() => _p = true) : null,
+      onTapUp: widget.onTap != null ? (_) { setState(() => _p = false); widget.onTap!(); } : null,
+      onTapCancel: widget.onTap != null ? () => setState(() => _p = false) : null,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-        decoration: BoxDecoration(
-          color: _p ? TrainTheme.muGlow : Colors.black,
-          borderRadius: BorderRadius.circular(2),
-          border: Border.all(color: TrainTheme.muGlow, width: 0.8),
-        ),
-        child: Text(
-          widget.label,
-          style: TrainTheme.orbitronStyle(
-            fontSize: 8,
-            fontWeight: FontWeight.w900,
-            color: _p ? Colors.black : TrainTheme.muGlow,
-          ),
-        ),
+        decoration: BoxDecoration(color: _p ? TrainTheme.muGlow : Colors.black, borderRadius: BorderRadius.circular(2), border: Border.all(color: TrainTheme.muGlow, width: 0.8)),
+        child: Text(widget.label, style: TrainTheme.orbitronStyle(fontSize: 8, fontWeight: FontWeight.w900, color: _p ? Colors.black : TrainTheme.muGlow)),
       ),
     );
   }

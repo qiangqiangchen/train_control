@@ -1,9 +1,11 @@
+// 覆盖: lib/widgets/control_buttons.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/train_theme.dart';
 import '../models/train_state.dart';
 import '../providers/train_provider.dart';
+import '../services/ble_service.dart'; // 【新增引入】用于获取蓝牙状态
 
 class ControlButtons extends ConsumerWidget {
   const ControlButtons({super.key});
@@ -12,7 +14,13 @@ class ControlButtons extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final ts = ref.watch(trainStateProvider);
     final n = ref.read(trainStateProvider.notifier);
-    final slave = ts.isSlave;
+    
+    // 【修改点】获取蓝牙真实连接状态
+    final conn = ref.watch(bleConnectionStateProvider);
+    final isConn = (conn.valueOrNull ?? BleConnectionState.disconnected) == BleConnectionState.connected;
+    
+    // 只有在已连接 且 不是补机 时，大部分按钮才可用
+    final disabledDefault = !isConn || ts.isSlave;
 
     return SizedBox(
       height: 55,
@@ -23,7 +31,7 @@ class ControlButtons extends ConsumerWidget {
                   label: '照明',
                   color: TrainTheme.glowOrange,
                   active: ts.headlight,
-                  disabled: slave,
+                  disabled: disabledDefault, // 【应用新状态】
                   onTap: () => n.toggleLight())),
           const SizedBox(width: 6),
           Expanded(
@@ -31,19 +39,20 @@ class ControlButtons extends ConsumerWidget {
                   label: '音效',
                   color: TrainTheme.glowBlue,
                   active: ts.soundEnabled,
-                  disabled: slave,
+                  disabled: disabledDefault, // 【应用新状态】
                   onTap: () => n.toggleSound())),
           const SizedBox(width: 6),
           Expanded(
               child: _CabSwitch(
                   cab: ts.cab,
-                  disabled: slave || ts.isRunning,
+                  // 换端按钮要求更严格：未连接、补机、运行中 都不允许换端
+                  disabled: disabledDefault || ts.isRunning, 
                   onToggle: () => n.changeCab())),
           const SizedBox(width: 6),
           Expanded(
               child: _CoupleBtn(
             status: ts.coupleStatus,
-            disabled: slave,
+            disabled: disabledDefault, // 【应用新状态】
             onTap: () => n.toggleCouple(),
             onLongPress: () {
               if (ts.isMaster && !ts.isRunning) n.uncouple();
@@ -54,6 +63,8 @@ class ControlButtons extends ConsumerWidget {
     );
   }
 }
+
+// ---------------- 以下为组件原代码，保持不变 ----------------
 
 class _CtrlBtn extends StatefulWidget {
   final String label;
@@ -80,26 +91,19 @@ class _CtrlBtnState extends State<_CtrlBtn> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTapDown: widget.disabled
-          ? null
-          : (_) => setState(() => _pressed = true),
-      onTapUp: widget.disabled
-          ? null
-          : (_) {
+      onTapDown: widget.disabled ? null : (_) => setState(() => _pressed = true),
+      onTapUp: widget.disabled ? null : (_) {
               setState(() => _pressed = false);
               widget.onTap();
               HapticFeedback.lightImpact();
             },
-      onTapCancel: widget.disabled
-          ? null
-          : () => setState(() => _pressed = false),
+      onTapCancel: widget.disabled ? null : () => setState(() => _pressed = false),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 80),
         transform: Matrix4.translationValues(0, _pressed ? 2 : 0, 0),
         decoration: BoxDecoration(
           gradient: widget.disabled
-              ? const LinearGradient(
-                  colors: [Color(0xFF252525), Color(0xFF1A1A1A)])
+              ? const LinearGradient(colors: [Color(0xFF252525), Color(0xFF1A1A1A)])
               : TrainTheme.metalBtnGradient,
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: TrainTheme.metalDark, width: 1.5),
@@ -118,9 +122,7 @@ class _CtrlBtnState extends State<_CtrlBtn> {
                 style: TrainTheme.rajdhaniStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
-                  color: widget.disabled
-                      ? const Color(0xFF555555)
-                      : const Color(0xFFA0AABF),
+                  color: widget.disabled ? const Color(0xFF555555) : const Color(0xFFA0AABF),
                   letterSpacing: 1,
                 )),
             const SizedBox(height: 5),
@@ -128,10 +130,9 @@ class _CtrlBtnState extends State<_CtrlBtn> {
               width: 22,
               height: 4,
               decoration: BoxDecoration(
-                color:
-                    widget.active ? widget.color : TrainTheme.metalDark,
+                color: widget.active && !widget.disabled ? widget.color : TrainTheme.metalDark,
                 borderRadius: BorderRadius.circular(2),
-                boxShadow: widget.active
+                boxShadow: widget.active && !widget.disabled
                     ? [BoxShadow(color: widget.color, blurRadius: 8)]
                     : null,
               ),
@@ -148,8 +149,7 @@ class _CabSwitch extends StatelessWidget {
   final bool disabled;
   final VoidCallback onToggle;
 
-  const _CabSwitch(
-      {required this.cab, required this.disabled, required this.onToggle});
+  const _CabSwitch({required this.cab, required this.disabled, required this.onToggle});
 
   @override
   Widget build(BuildContext context) {
@@ -157,9 +157,7 @@ class _CabSwitch extends StatelessWidget {
     final color = isB ? TrainTheme.glowOrange : TrainTheme.glowGreen;
 
     return GestureDetector(
-      onTap: disabled
-          ? null
-          : () {
+      onTap: disabled ? null : () {
               onToggle();
               HapticFeedback.mediumImpact();
             },
@@ -180,9 +178,7 @@ class _CabSwitch extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text('换端',
-                  style: TrainTheme.rajdhaniStyle(
-                      fontSize: 10, color: const Color(0xFF888888))),
+              Text('换端', style: TrainTheme.rajdhaniStyle(fontSize: 10, color: const Color(0xFF888888))),
               const SizedBox(height: 4),
               Container(
                 width: 40,
@@ -190,35 +186,19 @@ class _CabSwitch extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: const Color(0xFF0A0B0D),
                   borderRadius: BorderRadius.circular(9),
-                  border:
-                      Border.all(color: const Color(0xFF333333), width: 1),
-                  boxShadow: const [
-                    BoxShadow(
-                        color: Color(0xCC000000),
-                        offset: Offset(0, 1),
-                        blurRadius: 3)
-                  ],
+                  border: Border.all(color: const Color(0xFF333333), width: 1),
+                  boxShadow: const [BoxShadow(color: Color(0xCC000000), offset: Offset(0, 1), blurRadius: 3)],
                 ),
                 child: Stack(
                   children: [
                     Positioned(
-                        left: 4,
-                        top: 2,
-                        child: Text('A',
-                            style: TrainTheme.orbitronStyle(
-                                fontSize: 7,
-                                color: !isB
-                                    ? color.withOpacity(0.8)
-                                    : const Color(0xFF444444)))),
+                        left: 4, top: 2,
+                        child: Text('A', style: TrainTheme.orbitronStyle(
+                            fontSize: 7, color: !isB ? color.withOpacity(0.8) : const Color(0xFF444444)))),
                     Positioned(
-                        right: 4,
-                        top: 2,
-                        child: Text('B',
-                            style: TrainTheme.orbitronStyle(
-                                fontSize: 7,
-                                color: isB
-                                    ? color.withOpacity(0.8)
-                                    : const Color(0xFF444444)))),
+                        right: 4, top: 2,
+                        child: Text('B', style: TrainTheme.orbitronStyle(
+                            fontSize: 7, color: isB ? color.withOpacity(0.8) : const Color(0xFF444444)))),
                     AnimatedPositioned(
                       duration: const Duration(milliseconds: 200),
                       curve: Curves.easeOut,
@@ -231,13 +211,8 @@ class _CabSwitch extends StatelessWidget {
                           color: color,
                           borderRadius: BorderRadius.circular(6),
                           boxShadow: [
-                            BoxShadow(
-                                color: color.withOpacity(0.5),
-                                blurRadius: 5),
-                            BoxShadow(
-                                color: Colors.white.withOpacity(0.25),
-                                offset: const Offset(0, 1),
-                                blurRadius: 1),
+                            BoxShadow(color: color.withOpacity(0.5), blurRadius: 5),
+                            BoxShadow(color: Colors.white.withOpacity(0.25), offset: const Offset(0, 1), blurRadius: 1),
                           ],
                         ),
                       ),
@@ -270,8 +245,7 @@ class _CoupleBtn extends StatefulWidget {
   State<_CoupleBtn> createState() => _CoupleBtnState();
 }
 
-class _CoupleBtnState extends State<_CoupleBtn>
-    with SingleTickerProviderStateMixin {
+class _CoupleBtnState extends State<_CoupleBtn> with SingleTickerProviderStateMixin {
   bool _pressed = false;
   late AnimationController _blink;
 
@@ -292,16 +266,11 @@ class _CoupleBtnState extends State<_CoupleBtn>
 
   String get _label {
     switch (widget.status) {
-      case CoupleStatus.off:
-        return '重联';
-      case CoupleStatus.inviting:
-        return '邀请中';
-      case CoupleStatus.invited:
-        return '邀请';
-      case CoupleStatus.master:
-        return '已连';
-      case CoupleStatus.slave:
-        return '补机';
+      case CoupleStatus.off: return '重联';
+      case CoupleStatus.inviting: return '邀请中';
+      case CoupleStatus.invited: return '邀请';
+      case CoupleStatus.master: return '已连';
+      case CoupleStatus.slave: return '补机';
     }
   }
 
@@ -309,46 +278,33 @@ class _CoupleBtnState extends State<_CoupleBtn>
 
   bool get _canTap =>
       !widget.disabled &&
-      (widget.status == CoupleStatus.off ||
-          widget.status == CoupleStatus.inviting);
+      (widget.status == CoupleStatus.off || widget.status == CoupleStatus.inviting);
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTapDown: _canTap
-          ? (_) => setState(() => _pressed = true)
-          : null,
-      onTapUp: _canTap
-          ? (_) {
+      onTapDown: _canTap ? (_) => setState(() => _pressed = true) : null,
+      onTapUp: _canTap ? (_) {
               setState(() => _pressed = false);
               widget.onTap();
               HapticFeedback.lightImpact();
-            }
-          : null,
-      onTapCancel: _canTap
-          ? () => setState(() => _pressed = false)
-          : null,
-      onLongPress: widget.status == CoupleStatus.master
-          ? () {
+            } : null,
+      onTapCancel: _canTap ? () => setState(() => _pressed = false) : null,
+      onLongPress: widget.status == CoupleStatus.master ? () {
               widget.onLongPress();
               HapticFeedback.heavyImpact();
-            }
-          : null,
+            } : null,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 80),
         transform: Matrix4.translationValues(0, _pressed ? 2 : 0, 0),
         decoration: BoxDecoration(
           gradient: widget.disabled
-              ? const LinearGradient(
-                  colors: [Color(0xFF252525), Color(0xFF1A1A1A)])
+              ? const LinearGradient(colors: [Color(0xFF252525), Color(0xFF1A1A1A)])
               : TrainTheme.metalBtnGradient,
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: TrainTheme.metalDark, width: 1.5),
           boxShadow: [
-            BoxShadow(
-                color: Colors.black.withOpacity(0.6),
-                offset: const Offset(0, 4),
-                blurRadius: 7)
+            BoxShadow(color: Colors.black.withOpacity(0.6), offset: const Offset(0, 4), blurRadius: 7)
           ],
         ),
         child: Column(
@@ -357,9 +313,7 @@ class _CoupleBtnState extends State<_CoupleBtn>
             widget.status == CoupleStatus.inviting
                 ? AnimatedBuilder(
                     animation: _blink,
-                    builder: (_, child) => Opacity(
-                        opacity: 0.4 + 0.6 * _blink.value,
-                        child: child),
+                    builder: (_, child) => Opacity(opacity: 0.4 + 0.6 * _blink.value, child: child),
                     child: _labelWidget(),
                   )
                 : _labelWidget(),
@@ -368,9 +322,9 @@ class _CoupleBtnState extends State<_CoupleBtn>
               width: 22,
               height: 4,
               decoration: BoxDecoration(
-                color: _active ? TrainTheme.glowRed : TrainTheme.metalDark,
+                color: _active && !widget.disabled ? TrainTheme.glowRed : TrainTheme.metalDark,
                 borderRadius: BorderRadius.circular(2),
-                boxShadow: _active
+                boxShadow: _active && !widget.disabled
                     ? [BoxShadow(color: TrainTheme.glowRed, blurRadius: 8)]
                     : null,
               ),
@@ -386,9 +340,7 @@ class _CoupleBtnState extends State<_CoupleBtn>
         style: TrainTheme.rajdhaniStyle(
           fontSize: 12,
           fontWeight: FontWeight.w700,
-          color: widget.disabled
-              ? const Color(0xFF555555)
-              : const Color(0xFFA0AABF),
+          color: widget.disabled ? const Color(0xFF555555) : const Color(0xFFA0AABF),
           letterSpacing: 1,
         ));
   }

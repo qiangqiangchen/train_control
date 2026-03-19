@@ -135,7 +135,9 @@ class _TopStatusBarState extends ConsumerState<TopStatusBar>
           const SizedBox(width: 8),
           Container(
               width: 1, height: 20, color: const Color(0xFF333333)),
-          const SizedBox(width: 8),
+          
+          const Spacer(), // 【修改点】将 Spacer 移到这里，把后续组件全部推向右侧
+          
           _chip(
               '电压',
               _lcdVal(ts.batteryVoltage.toStringAsFixed(2), 'V',
@@ -146,11 +148,14 @@ class _TopStatusBarState extends ConsumerState<TopStatusBar>
           _chip('端位', _cabBadge(ts.cab)),
           const SizedBox(width: 8),
           _chip('编组', _coupleBadge(ts.coupleStatus)),
-          const Spacer(),
-          if (ts.firmwareVersion.isNotEmpty)
+          
+          // 如果有固件版本，增加一点间距
+          if (ts.firmwareVersion.isNotEmpty) ...[
+            const SizedBox(width: 8),
             Text('FW ${ts.firmwareVersion}',
                 style: TrainTheme.rajdhaniStyle(
                     fontSize: 10, color: TrainTheme.textDim)),
+          ]
         ],
       ),
     );
