@@ -1,13 +1,6 @@
-/// 中面板：功能按钮组
-///
-/// 四个功能按钮：照明、音效、换端、重联。
-/// 金属按钮质感 + 底部指示灯 + 按压动效。
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_fonts/google_fonts.dart';
-
 import '../theme/train_theme.dart';
 import '../models/train_state.dart';
 import '../providers/train_provider.dart';
@@ -17,190 +10,130 @@ class ControlButtons extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final trainState = ref.watch(trainStateProvider);
-    final notifier = ref.read(trainStateProvider.notifier);
-    final isSlave = trainState.isSlave;
+    final ts = ref.watch(trainStateProvider);
+    final n = ref.read(trainStateProvider.notifier);
+    final slave = ts.isSlave;
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        // 照明
-        Expanded(
-          child: _ControlButton(
-            label: '照明',
-            color: TrainTheme.glowOrange,
-            isActive: trainState.headlight,
-            isDisabled: isSlave,
-            onTap: () => notifier.toggleLight(),
-          ),
-        ),
-        const SizedBox(width: 15),
-        // 音效
-        Expanded(
-          child: _ControlButton(
-            label: '音效',
-            color: TrainTheme.glowBlue,
-            isActive: trainState.soundEnabled,
-            isDisabled: isSlave,
-            onTap: () => notifier.toggleSound(),
-          ),
-        ),
-        const SizedBox(width: 15),
-        // 换端
-        Expanded(
-          child: _ControlButton(
-            label: '换端',
-            color: TrainTheme.glowGreen,
-            isActive: false,
-            isDisabled: isSlave || trainState.isRunning,
-            onTap: () => notifier.changeCab(),
-          ),
-        ),
-        const SizedBox(width: 15),
-        // 重联
-        Expanded(
-          child: _CoupleButton(
-            coupleStatus: trainState.coupleStatus,
-            isDisabled: isSlave,
-            onTap: () => notifier.toggleCouple(),
+    return SizedBox(
+      height: 55,
+      child: Row(
+        children: [
+          Expanded(
+              child: _CtrlBtn(
+                  label: '照明',
+                  color: TrainTheme.glowOrange,
+                  active: ts.headlight,
+                  disabled: slave,
+                  onTap: () => n.toggleLight())),
+          const SizedBox(width: 6),
+          Expanded(
+              child: _CtrlBtn(
+                  label: '音效',
+                  color: TrainTheme.glowBlue,
+                  active: ts.soundEnabled,
+                  disabled: slave,
+                  onTap: () => n.toggleSound())),
+          const SizedBox(width: 6),
+          Expanded(
+              child: _CabSwitch(
+                  cab: ts.cab,
+                  disabled: slave || ts.isRunning,
+                  onToggle: () => n.changeCab())),
+          const SizedBox(width: 6),
+          Expanded(
+              child: _CoupleBtn(
+            status: ts.coupleStatus,
+            disabled: slave,
+            onTap: () => n.toggleCouple(),
             onLongPress: () {
-              // 长按解除重联
-              if (trainState.isMaster && !trainState.isRunning) {
-                notifier.uncouple();
-              }
+              if (ts.isMaster && !ts.isRunning) n.uncouple();
             },
-          ),
-        ),
-      ],
+          )),
+        ],
+      ),
     );
   }
 }
 
-/// 通用金属按钮
-class _ControlButton extends StatefulWidget {
+class _CtrlBtn extends StatefulWidget {
   final String label;
   final Color color;
-  final bool isActive;
-  final bool isDisabled;
+  final bool active;
+  final bool disabled;
   final VoidCallback onTap;
 
-  const _ControlButton({
+  const _CtrlBtn({
     required this.label,
     required this.color,
-    required this.isActive,
-    required this.isDisabled,
+    required this.active,
+    required this.disabled,
     required this.onTap,
   });
 
   @override
-  State<_ControlButton> createState() => _ControlButtonState();
+  State<_CtrlBtn> createState() => _CtrlBtnState();
 }
 
-class _ControlButtonState extends State<_ControlButton> {
-  bool _isPressed = false;
+class _CtrlBtnState extends State<_CtrlBtn> {
+  bool _pressed = false;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTapDown: widget.isDisabled
+      onTapDown: widget.disabled
           ? null
-          : (_) => setState(() => _isPressed = true),
-      onTapUp: widget.isDisabled
+          : (_) => setState(() => _pressed = true),
+      onTapUp: widget.disabled
           ? null
           : (_) {
-              setState(() => _isPressed = false);
+              setState(() => _pressed = false);
               widget.onTap();
               HapticFeedback.lightImpact();
             },
-      onTapCancel: widget.isDisabled
+      onTapCancel: widget.disabled
           ? null
-          : () => setState(() => _isPressed = false),
+          : () => setState(() => _pressed = false),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 100),
-        height: 75,
-        transform: Matrix4.translationValues(
-            0, _isPressed ? 3 : 0, 0),
+        duration: const Duration(milliseconds: 80),
+        transform: Matrix4.translationValues(0, _pressed ? 2 : 0, 0),
         decoration: BoxDecoration(
-          gradient: widget.isDisabled
+          gradient: widget.disabled
               ? const LinearGradient(
-                  colors: [Color(0xFF252525), Color(0xFF1A1A1A)],
-                )
+                  colors: [Color(0xFF252525), Color(0xFF1A1A1A)])
               : TrainTheme.metalBtnGradient,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: TrainTheme.metalDark, width: 2),
-          boxShadow: _isPressed
-              ? [
-                  const BoxShadow(
-                    color: Color(0xCC000000),
-                    offset: Offset(0, 2),
-                    blurRadius: 4,
-                  ),
-                  const BoxShadow(
-                    color: Color(0x80000000),
-                    offset: Offset(0, 2),
-                    blurRadius: 5,
-                  ),
-                ]
-              : [
-                  const BoxShadow(
-                    color: Color(0x99000000),
-                    offset: Offset(0, 6),
-                    blurRadius: 10,
-                  ),
-                  BoxShadow(
-                    color: Colors.white.withOpacity(0.1),
-                    offset: const Offset(0, 2),
-                    blurRadius: 2,
-                  ),
-                ],
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: TrainTheme.metalDark, width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(_pressed ? 0.9 : 0.6),
+              offset: Offset(0, _pressed ? 1 : 4),
+              blurRadius: _pressed ? 2 : 7,
+            )
+          ],
         ),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const SizedBox(height: 8),
-            // 标签
-            Text(
-              widget.label,
-              style: GoogleFonts.roboto(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: widget.isDisabled
-                    ? const Color(0xFF555555)
-                    : const Color(0xFFA0AABF),
-                letterSpacing: 2,
-                shadows: [
-                  const Shadow(
-                    color: Colors.black,
-                    offset: Offset(0, -1),
-                    blurRadius: 1,
-                  ),
-                ],
-              ),
-            ),
-            // 指示灯条
+            Text(widget.label,
+                style: TrainTheme.rajdhaniStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: widget.disabled
+                      ? const Color(0xFF555555)
+                      : const Color(0xFFA0AABF),
+                  letterSpacing: 1,
+                )),
+            const SizedBox(height: 5),
             Container(
-              width: 28,
-              height: 5,
-              margin: const EdgeInsets.only(bottom: 12),
+              width: 22,
+              height: 4,
               decoration: BoxDecoration(
-                color: widget.isActive
-                    ? widget.color
-                    : TrainTheme.metalDark,
+                color:
+                    widget.active ? widget.color : TrainTheme.metalDark,
                 borderRadius: BorderRadius.circular(2),
-                boxShadow: widget.isActive
-                    ? [
-                        BoxShadow(
-                          color: widget.color,
-                          blurRadius: 10,
-                        ),
-                      ]
-                    : [
-                        const BoxShadow(
-                          color: Color(0xFF000000),
-                          offset: Offset(0, 1),
-                          blurRadius: 2,
-                        ),
-                      ],
+                boxShadow: widget.active
+                    ? [BoxShadow(color: widget.color, blurRadius: 8)]
+                    : null,
               ),
             ),
           ],
@@ -210,33 +143,142 @@ class _ControlButtonState extends State<_ControlButton> {
   }
 }
 
-/// 重联按钮（带状态文字变化）
-class _CoupleButton extends StatefulWidget {
-  final CoupleStatus coupleStatus;
-  final bool isDisabled;
+class _CabSwitch extends StatelessWidget {
+  final CabEnd cab;
+  final bool disabled;
+  final VoidCallback onToggle;
+
+  const _CabSwitch(
+      {required this.cab, required this.disabled, required this.onToggle});
+
+  @override
+  Widget build(BuildContext context) {
+    final isB = cab == CabEnd.b;
+    final color = isB ? TrainTheme.glowOrange : TrainTheme.glowGreen;
+
+    return GestureDetector(
+      onTap: disabled
+          ? null
+          : () {
+              onToggle();
+              HapticFeedback.mediumImpact();
+            },
+      child: Opacity(
+        opacity: disabled ? 0.4 : 1,
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: TrainTheme.metalBtnGradient,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: TrainTheme.metalDark, width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.6),
+                  offset: const Offset(0, 4),
+                  blurRadius: 7)
+            ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text('换端',
+                  style: TrainTheme.rajdhaniStyle(
+                      fontSize: 10, color: const Color(0xFF888888))),
+              const SizedBox(height: 4),
+              Container(
+                width: 40,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0A0B0D),
+                  borderRadius: BorderRadius.circular(9),
+                  border:
+                      Border.all(color: const Color(0xFF333333), width: 1),
+                  boxShadow: const [
+                    BoxShadow(
+                        color: Color(0xCC000000),
+                        offset: Offset(0, 1),
+                        blurRadius: 3)
+                  ],
+                ),
+                child: Stack(
+                  children: [
+                    Positioned(
+                        left: 4,
+                        top: 2,
+                        child: Text('A',
+                            style: TrainTheme.orbitronStyle(
+                                fontSize: 7,
+                                color: !isB
+                                    ? color.withOpacity(0.8)
+                                    : const Color(0xFF444444)))),
+                    Positioned(
+                        right: 4,
+                        top: 2,
+                        child: Text('B',
+                            style: TrainTheme.orbitronStyle(
+                                fontSize: 7,
+                                color: isB
+                                    ? color.withOpacity(0.8)
+                                    : const Color(0xFF444444)))),
+                    AnimatedPositioned(
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeOut,
+                      left: isB ? 20 : 2,
+                      top: 2,
+                      child: Container(
+                        width: 14,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: color,
+                          borderRadius: BorderRadius.circular(6),
+                          boxShadow: [
+                            BoxShadow(
+                                color: color.withOpacity(0.5),
+                                blurRadius: 5),
+                            BoxShadow(
+                                color: Colors.white.withOpacity(0.25),
+                                offset: const Offset(0, 1),
+                                blurRadius: 1),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CoupleBtn extends StatefulWidget {
+  final CoupleStatus status;
+  final bool disabled;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
 
-  const _CoupleButton({
-    required this.coupleStatus,
-    required this.isDisabled,
+  const _CoupleBtn({
+    required this.status,
+    required this.disabled,
     required this.onTap,
     required this.onLongPress,
   });
 
   @override
-  State<_CoupleButton> createState() => _CoupleButtonState();
+  State<_CoupleBtn> createState() => _CoupleBtnState();
 }
 
-class _CoupleButtonState extends State<_CoupleButton>
+class _CoupleBtnState extends State<_CoupleBtn>
     with SingleTickerProviderStateMixin {
-  bool _isPressed = false;
-  late AnimationController _blinkController;
+  bool _pressed = false;
+  late AnimationController _blink;
 
   @override
   void initState() {
     super.initState();
-    _blinkController = AnimationController(
+    _blink = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 600),
     )..repeat(reverse: true);
@@ -244,131 +286,93 @@ class _CoupleButtonState extends State<_CoupleButton>
 
   @override
   void dispose() {
-    _blinkController.dispose();
+    _blink.dispose();
     super.dispose();
   }
 
   String get _label {
-    switch (widget.coupleStatus) {
+    switch (widget.status) {
       case CoupleStatus.off:
         return '重联';
       case CoupleStatus.inviting:
         return '邀请中';
       case CoupleStatus.invited:
-        return '收到邀请';
+        return '邀请';
       case CoupleStatus.master:
-        return '已连接';
+        return '已连';
       case CoupleStatus.slave:
         return '补机';
     }
   }
 
-  bool get _isActive =>
-      widget.coupleStatus != CoupleStatus.off;
+  bool get _active => widget.status != CoupleStatus.off;
 
   bool get _canTap =>
-      !widget.isDisabled &&
-      (widget.coupleStatus == CoupleStatus.off ||
-          widget.coupleStatus == CoupleStatus.inviting);
+      !widget.disabled &&
+      (widget.status == CoupleStatus.off ||
+          widget.status == CoupleStatus.inviting);
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTapDown: _canTap
-          ? (_) => setState(() => _isPressed = true)
+          ? (_) => setState(() => _pressed = true)
           : null,
       onTapUp: _canTap
           ? (_) {
-              setState(() => _isPressed = false);
+              setState(() => _pressed = false);
               widget.onTap();
               HapticFeedback.lightImpact();
             }
           : null,
       onTapCancel: _canTap
-          ? () => setState(() => _isPressed = false)
+          ? () => setState(() => _pressed = false)
           : null,
-      onLongPress: widget.coupleStatus == CoupleStatus.master
+      onLongPress: widget.status == CoupleStatus.master
           ? () {
               widget.onLongPress();
               HapticFeedback.heavyImpact();
             }
           : null,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 100),
-        height: 75,
-        transform: Matrix4.translationValues(
-            0, _isPressed ? 3 : 0, 0),
+        duration: const Duration(milliseconds: 80),
+        transform: Matrix4.translationValues(0, _pressed ? 2 : 0, 0),
         decoration: BoxDecoration(
-          gradient: widget.isDisabled
+          gradient: widget.disabled
               ? const LinearGradient(
-                  colors: [Color(0xFF252525), Color(0xFF1A1A1A)],
-                )
+                  colors: [Color(0xFF252525), Color(0xFF1A1A1A)])
               : TrainTheme.metalBtnGradient,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: TrainTheme.metalDark, width: 2),
-          boxShadow: _isPressed
-              ? [
-                  const BoxShadow(
-                    color: Color(0xCC000000),
-                    offset: Offset(0, 2),
-                    blurRadius: 4,
-                  ),
-                ]
-              : [
-                  const BoxShadow(
-                    color: Color(0x99000000),
-                    offset: Offset(0, 6),
-                    blurRadius: 10,
-                  ),
-                  BoxShadow(
-                    color: Colors.white.withOpacity(0.1),
-                    offset: const Offset(0, 2),
-                    blurRadius: 2,
-                  ),
-                ],
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: TrainTheme.metalDark, width: 1.5),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withOpacity(0.6),
+                offset: const Offset(0, 4),
+                blurRadius: 7)
+          ],
         ),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const SizedBox(height: 8),
-            // 标签（邀请中时闪烁）
-            widget.coupleStatus == CoupleStatus.inviting
+            widget.status == CoupleStatus.inviting
                 ? AnimatedBuilder(
-                    animation: _blinkController,
-                    builder: (context, child) {
-                      return Opacity(
-                        opacity:
-                            0.4 + 0.6 * _blinkController.value,
-                        child: child,
-                      );
-                    },
-                    child: _buildLabel(),
+                    animation: _blink,
+                    builder: (_, child) => Opacity(
+                        opacity: 0.4 + 0.6 * _blink.value,
+                        child: child),
+                    child: _labelWidget(),
                   )
-                : _buildLabel(),
-            // 指示灯
+                : _labelWidget(),
+            const SizedBox(height: 5),
             Container(
-              width: 28,
-              height: 5,
-              margin: const EdgeInsets.only(bottom: 12),
+              width: 22,
+              height: 4,
               decoration: BoxDecoration(
-                color: _isActive
-                    ? TrainTheme.glowRed
-                    : TrainTheme.metalDark,
+                color: _active ? TrainTheme.glowRed : TrainTheme.metalDark,
                 borderRadius: BorderRadius.circular(2),
-                boxShadow: _isActive
-                    ? [
-                        BoxShadow(
-                          color: TrainTheme.glowRed,
-                          blurRadius: 10,
-                        ),
-                      ]
-                    : [
-                        const BoxShadow(
-                          color: Color(0xFF000000),
-                          offset: Offset(0, 1),
-                          blurRadius: 2,
-                        ),
-                      ],
+                boxShadow: _active
+                    ? [BoxShadow(color: TrainTheme.glowRed, blurRadius: 8)]
+                    : null,
               ),
             ),
           ],
@@ -377,24 +381,15 @@ class _CoupleButtonState extends State<_CoupleButton>
     );
   }
 
-  Widget _buildLabel() {
-    return Text(
-      _label,
-      style: GoogleFonts.roboto(
-        fontSize: 14,
-        fontWeight: FontWeight.w700,
-        color: widget.isDisabled
-            ? const Color(0xFF555555)
-            : const Color(0xFFA0AABF),
-        letterSpacing: 2,
-        shadows: [
-          const Shadow(
-            color: Colors.black,
-            offset: Offset(0, -1),
-            blurRadius: 1,
-          ),
-        ],
-      ),
-    );
+  Widget _labelWidget() {
+    return Text(_label,
+        style: TrainTheme.rajdhaniStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          color: widget.disabled
+              ? const Color(0xFF555555)
+              : const Color(0xFFA0AABF),
+          letterSpacing: 1,
+        ));
   }
 }

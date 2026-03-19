@@ -1,241 +1,112 @@
-/// 速度表盘 CustomPainter
-///
-/// 绘制工业风格速度表盘，范围 0~8 档位。
-/// 包含：表盘背景、刻度线、数字、指针、中心轴等。
-/// 指针由 APWM (0~255) 驱动。
-
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../theme/train_theme.dart';
 
 class SpeedometerPainter extends CustomPainter {
-  /// 指针角度值，0.0~1.0 (0=最左侧,1=最右侧)
   final double needleValue;
-
-  /// 表盘半径
   final double outerRadius;
 
-  SpeedometerPainter({
-    required this.needleValue,
-    this.outerRadius = 160,
-  });
+  SpeedometerPainter({required this.needleValue, this.outerRadius = 140});
 
-  // 表盘角度范围（与 HTML 设计稿一致）
-  static const double _startAngle = -130.0; // 度
-  static const double _endAngle = 130.0;
-  static const double _totalAngle = _endAngle - _startAngle; // 260度
+  static const double _sa = -130;
+  static const double _ea = 130;
+  static const double _ta = 260;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final bgRadius = outerRadius * 0.875; // speedo-bg 280/320
+    final c = Offset(size.width / 2, size.height / 2);
+    final br = outerRadius * 0.88;
 
-    // 1. 外框
-    _drawOuterFrame(canvas, center, outerRadius);
-
-    // 2. 表盘背景
-    _drawBackground(canvas, center, bgRadius);
-
-    // 3. 刻度和数字
-    _drawTicks(canvas, center, bgRadius);
-
-    // 4. 指针
-    _drawNeedle(canvas, center, bgRadius);
-
-    // 5. 中心轴
-    _drawCenter(canvas, center);
-  }
-
-  void _drawOuterFrame(Canvas canvas, Offset center, double radius) {
-    // 黑色外框
-    final framePaint = Paint()
-      ..color = const Color(0xFF111111)
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(center, radius, framePaint);
-
-    // 内阴影效果
-    final innerShadow = Paint()
+    // 外框
+    canvas.drawCircle(c, outerRadius, Paint()..color = const Color(0xFF111111));
+    canvas.drawCircle(c, outerRadius - 2, Paint()
       ..color = Colors.black
-      ..maskFilter = const MaskFilter.blur(BlurStyle.inner, 15);
-    canvas.drawCircle(center, radius, innerShadow);
-
-    // 外层金属环
-    final metalRing = Paint()
+      ..maskFilter = const MaskFilter.blur(BlurStyle.inner, 12));
+    canvas.drawCircle(c, outerRadius + 4, Paint()
       ..color = const Color(0xFF2A2D34)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 10;
-    canvas.drawCircle(center, radius + 5, metalRing);
-
-    // 外层黑边
-    final outerBorder = Paint()
+      ..strokeWidth = 8);
+    canvas.drawCircle(c, outerRadius + 8, Paint()
       ..color = const Color(0xFF111111)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
-    canvas.drawCircle(center, radius + 10, outerBorder);
+      ..strokeWidth = 1.5);
+    canvas.drawCircle(c + const Offset(0, 4), outerRadius, Paint()
+      ..color = Colors.black.withOpacity(0.4)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10));
 
-    // 外阴影
-    final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.5)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
-    canvas.drawCircle(center + const Offset(0, 5), radius, shadowPaint);
-  }
+    // 背景
+    canvas.drawCircle(c, br, Paint()..shader = RadialGradient(
+      colors: [const Color(0xFF1A2A3A), const Color(0xFF0A1118), const Color(0xFF05080C)],
+      stops: const [0, 0.8, 1],
+    ).createShader(Rect.fromCircle(center: c, radius: br)));
 
-  void _drawBackground(Canvas canvas, Offset center, double radius) {
-    final bgPaint = Paint()
-      ..shader = RadialGradient(
-        center: Alignment.center,
-        radius: 1.0,
-        colors: [
-          const Color(0xFF1A2A3A),
-          const Color(0xFF0A1118),
-          const Color(0xFF05080C),
-        ],
-        stops: const [0.0, 0.8, 1.0],
-      ).createShader(Rect.fromCircle(center: center, radius: radius));
-    canvas.drawCircle(center, radius, bgPaint);
-  }
-
-  void _drawTicks(Canvas canvas, Offset center, double radius) {
-    const maxNotch = 8;
-
-    // 主刻度 (0~8) 和次刻度
-    for (int i = 0; i <= maxNotch * 2; i++) {
-      final value = i / (maxNotch * 2);
-      final angle = (_startAngle + value * _totalAngle) * math.pi / 180;
-
-      final isMajor = i % 2 == 0;
-      final tickOuter = radius * 0.96;
-      final tickInner = isMajor ? radius * 0.83 : radius * 0.88;
-
-      final outerPoint = Offset(
-        center.dx + tickOuter * math.cos(angle - math.pi / 2),
-        center.dy + tickOuter * math.sin(angle - math.pi / 2),
+    // 刻度
+    for (int i = 0; i <= 16; i++) {
+      final v = i / 16.0;
+      final a = (_sa + v * _ta) * math.pi / 180 - math.pi / 2;
+      final major = i % 2 == 0;
+      final to = br * 0.96;
+      final ti = major ? br * 0.83 : br * 0.88;
+      canvas.drawLine(
+        Offset(c.dx + ti * math.cos(a), c.dy + ti * math.sin(a)),
+        Offset(c.dx + to * math.cos(a), c.dy + to * math.sin(a)),
+        Paint()
+          ..color = major ? const Color(0xFF88C0D0) : Colors.white
+          ..strokeWidth = major ? 2.5 : 1.5
+          ..strokeCap = StrokeCap.round,
       );
-      final innerPoint = Offset(
-        center.dx + tickInner * math.cos(angle - math.pi / 2),
-        center.dy + tickInner * math.sin(angle - math.pi / 2),
-      );
-
-      final tickPaint = Paint()
-        ..color = isMajor ? const Color(0xFF88C0D0) : Colors.white
-        ..strokeWidth = isMajor ? 3 : 2
-        ..strokeCap = StrokeCap.round;
-
-      canvas.drawLine(innerPoint, outerPoint, tickPaint);
-
-      // 主刻度数字
-      if (isMajor) {
-        final numRadius = radius * 0.7;
-        final numPos = Offset(
-          center.dx + numRadius * math.cos(angle - math.pi / 2),
-          center.dy + numRadius * math.sin(angle - math.pi / 2),
-        );
-
-        final textPainter = TextPainter(
+      if (major) {
+        final nr = br * 0.70;
+        final np = Offset(c.dx + nr * math.cos(a), c.dy + nr * math.sin(a));
+        final tp = TextPainter(
           text: TextSpan(
             text: '${i ~/ 2}',
-            style: const TextStyle(
-              fontFamily: 'Rajdhani',
-              fontSize: 18,
+            style: TextStyle(
+              fontFamily: 'RobotoCondensed',
+              fontSize: br * 0.12,
               fontWeight: FontWeight.w700,
-              color: Color(0xFFE5E9F0),
+              color: const Color(0xFFE5E9F0),
             ),
           ),
           textDirection: TextDirection.ltr,
         );
-        textPainter.layout();
-        textPainter.paint(
-          canvas,
-          numPos - Offset(textPainter.width / 2, textPainter.height / 2),
-        );
+        tp.layout();
+        tp.paint(canvas, np - Offset(tp.width / 2, tp.height / 2));
       }
     }
-  }
 
-  void _drawNeedle(Canvas canvas, Offset center, double radius) {
-    final angle =
-        (_startAngle + needleValue * _totalAngle) * math.pi / 180 -
-            math.pi / 2;
-
-    final needleLength = radius * 0.86;
-
-    // 指针发光
-    final glowPaint = Paint()
+    // 指针
+    final na = (_sa + needleValue * _ta) * math.pi / 180 - math.pi / 2;
+    final nl = br * 0.85;
+    final ne = Offset(c.dx + nl * math.cos(na), c.dy + nl * math.sin(na));
+    canvas.drawLine(c, ne, Paint()
       ..color = TrainTheme.glowRed.withOpacity(0.3)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
-
-    final needleEnd = Offset(
-      center.dx + needleLength * math.cos(angle),
-      center.dy + needleLength * math.sin(angle),
-    );
-
-    canvas.drawLine(center, needleEnd, glowPaint);
-
-    // 指针本体（渐变）
-    final needlePaint = Paint()
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round
-      ..shader = LinearGradient(
-        colors: [
-          Colors.transparent,
-          TrainTheme.glowRed.withOpacity(0.3),
-          TrainTheme.glowRed,
-          const Color(0xFFFF7675),
-        ],
-        stops: const [0.0, 0.2, 0.6, 1.0],
-      ).createShader(
-        Rect.fromPoints(center, needleEnd),
-      );
-
-    canvas.drawLine(center, needleEnd, needlePaint);
-
-    // 指针红色尖端
-    final tipPaint = Paint()
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
+    final tipStart = Offset(c.dx + nl * 0.4 * math.cos(na), c.dy + nl * 0.4 * math.sin(na));
+    canvas.drawLine(tipStart, ne, Paint()
       ..color = TrainTheme.glowRed
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round;
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round);
+    canvas.drawLine(c, tipStart, Paint()
+      ..color = TrainTheme.glowRed.withOpacity(0.3)
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round);
 
-    final tipStart = Offset(
-      center.dx + (needleLength * 0.5) * math.cos(angle),
-      center.dy + (needleLength * 0.5) * math.sin(angle),
-    );
-
-    canvas.drawLine(tipStart, needleEnd, tipPaint);
-  }
-
-  void _drawCenter(Canvas canvas, Offset center) {
-    // 中心轴外环
-    final centerRadius = 17.5;
-
-    final centerPaint = Paint()
-      ..shader = RadialGradient(
-        center: Alignment.center,
-        radius: 1.0,
-        colors: [const Color(0xFF555555), const Color(0xFF111111)],
-      ).createShader(Rect.fromCircle(center: center, radius: centerRadius));
-    canvas.drawCircle(center, centerRadius, centerPaint);
-
-    // 高光
-    final highlightPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          Colors.white.withOpacity(0.3),
-          Colors.transparent,
-        ],
-      ).createShader(
-          Rect.fromCircle(center: center, radius: centerRadius));
-    canvas.drawCircle(center, centerRadius, highlightPaint);
-
-    // 阴影
-    final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.8)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
-    canvas.drawCircle(center + const Offset(0, 3), centerRadius, shadowPaint);
+    // 中心
+    final cr = outerRadius * 0.1;
+    canvas.drawCircle(c + const Offset(0, 2), cr, Paint()
+      ..color = Colors.black.withOpacity(0.7)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5));
+    canvas.drawCircle(c, cr, Paint()..shader = RadialGradient(
+      colors: [const Color(0xFF555555), const Color(0xFF111111)],
+    ).createShader(Rect.fromCircle(center: c, radius: cr)));
+    canvas.drawCircle(c, cr, Paint()..shader = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [Colors.white.withOpacity(0.25), Colors.transparent],
+    ).createShader(Rect.fromCircle(center: c, radius: cr)));
   }
 
   @override
-  bool shouldRepaint(covariant SpeedometerPainter oldDelegate) =>
-      oldDelegate.needleValue != needleValue;
+  bool shouldRepaint(covariant SpeedometerPainter old) => old.needleValue != needleValue;
 }

@@ -1,13 +1,6 @@
-/// 主控制面板页面
-///
-/// 工业仪表盘风格的主控制界面，包含三个面板：
-/// 左面板(方向控制)、中面板(仪表+按钮)、右面板(油门+重联)。
-/// 根据火车角色状态(独立/本务机/补机)切换不同UI模式。
-
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import '../theme/train_theme.dart';
 import '../models/train_state.dart';
@@ -18,13 +11,11 @@ import '../widgets/top_status_bar.dart';
 import '../widgets/direction_panel.dart';
 import '../widgets/speedometer.dart';
 import '../widgets/control_buttons.dart';
-import '../widgets/emergency_stop.dart';
 import '../widgets/throttle_lever.dart';
 import '../widgets/led_bar.dart';
 import '../widgets/mu_monitor.dart';
 import '../widgets/screw_widget.dart';
 import '../widgets/couple_invite_dialog.dart';
-import 'scan_screen.dart';
 
 class DashboardScreen extends ConsumerStatefulWidget {
   const DashboardScreen({super.key});
@@ -34,159 +25,101 @@ class DashboardScreen extends ConsumerStatefulWidget {
 }
 
 class _DashboardScreenState extends ConsumerState<DashboardScreen> {
-  StreamSubscription? _connectionSub;
-  bool _showedInviteDialog = false;
-  CoupleStatus _lastCoupleStatus = CoupleStatus.off;
+  StreamSubscription<BleConnectionState>? _connSub;
+  bool _showedInvite = false;
 
   @override
   void initState() {
     super.initState();
-    // 监听连接状态变化
-    final bleService = ref.read(bleServiceProvider);
-    _connectionSub = bleService.connectionStateStream.listen((state) {
-      if (state == BleConnectionState.disconnected && mounted) {
-        _handleDisconnect();
-      } else if (state == BleConnectionState.reconnecting && mounted) {
-        _showReconnectingOverlay();
-      }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ble = ref.read(bleServiceProvider);
+      _connSub = ble.connectionStateStream.listen((s) {
+        if (s == BleConnectionState.reconnecting && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(children: [
+                const SizedBox(
+                  width: 16, height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                ),
+                const SizedBox(width: 10),
+                Text('正在重连...', style: TrainTheme.rajdhaniStyle(fontSize: 14)),
+              ]),
+              backgroundColor: TrainTheme.glowOrange.withOpacity(0.8),
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+      });
     });
   }
 
   @override
   void dispose() {
-    _connectionSub?.cancel();
+    _connSub?.cancel();
     super.dispose();
   }
 
-  void _handleDisconnect() {
-    if (!mounted) return;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const ScanScreen()),
-    );
-  }
-
-  void _showReconnectingOverlay() {
-    // 显示重连提示
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Colors.white,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              '正在重连...',
-              style: GoogleFonts.rajdhani(fontWeight: FontWeight.w700),
-            ),
-          ],
-        ),
-        backgroundColor: TrainTheme.glowOrange.withOpacity(0.8),
-        duration: const Duration(seconds: 5),
-      ),
-    );
-  }
-
-  void _showErrorToast(TrainError error) {
-    if (error == TrainError.none) return;
-    final message = StateParser.errorMessage(error);
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '⚠️ $message',
-          style: GoogleFonts.rajdhani(
-            fontWeight: FontWeight.w700,
-            fontSize: 14,
-          ),
-        ),
-        backgroundColor: TrainTheme.glowRed.withOpacity(0.8),
-        duration: const Duration(seconds: 2),
-      ),
-    );
-
-    ref.read(trainStateProvider.notifier).clearError();
-  }
-
-  void _checkInviteDialog(TrainState trainState) {
-    // 收到重联邀请时弹窗
-    if (trainState.isInvited && !_showedInviteDialog) {
-      _showedInviteDialog = true;
+  void _checkInvite(TrainState ts) {
+    if (ts.isInvited && !_showedInvite) {
+      _showedInvite = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (_) => CoupleInviteDialog(
-              inviterMac: trainState.inviterMac ?? 'Unknown',
-              onAcceptA: () {
-                ref.read(trainStateProvider.notifier).acceptCoupleA();
-                Navigator.pop(context);
-              },
-              onAcceptB: () {
-                ref.read(trainStateProvider.notifier).acceptCoupleB();
-                Navigator.pop(context);
-              },
-              onReject: () {
-                Navigator.pop(context);
-              },
-            ),
-          );
-        }
+        if (!mounted) return;
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => CoupleInviteDialog(
+            inviterMac: ts.inviterMac ?? 'Unknown',
+            onAcceptA: () { ref.read(trainStateProvider.notifier).acceptCoupleA(); Navigator.pop(context); },
+            onAcceptB: () { ref.read(trainStateProvider.notifier).acceptCoupleB(); Navigator.pop(context); },
+            onReject: () => Navigator.pop(context),
+          ),
+        );
       });
-    } else if (!trainState.isInvited) {
-      _showedInviteDialog = false;
+    } else if (!ts.isInvited) {
+      _showedInvite = false;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final trainState = ref.watch(trainStateProvider);
-    final screenSize = MediaQuery.of(context).size;
+    final ts = ref.watch(trainStateProvider);
 
-    // 检查错误
-    if (trainState.error != TrainError.none) {
+    if (ts.error != TrainError.none) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _showErrorToast(trainState.error);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('⚠️ ${StateParser.errorMessage(ts.error)}',
+              style: TrainTheme.rajdhaniStyle(fontSize: 14)),
+            backgroundColor: TrainTheme.glowRed.withOpacity(0.8),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        ref.read(trainStateProvider.notifier).clearError();
       });
     }
-
-    // 检查重联邀请
-    _checkInviteDialog(trainState);
+    _checkInvite(ts);
 
     return Scaffold(
-      backgroundColor: TrainTheme.bodyBg,
+      backgroundColor: Colors.transparent,
       body: Container(
         decoration: const BoxDecoration(
           gradient: RadialGradient(
             center: Alignment.center,
-            radius: 1.0,
+            radius: 1.2,
             colors: [Color(0xFF1A1A24), Color(0xFF000000)],
           ),
         ),
         child: SafeArea(
-          child: Center(
-            child: FittedBox(
-              fit: BoxFit.contain,
-              child: SizedBox(
-                width: 1260,
-                height: 880,
-                child: Column(
-                  children: [
-                    // 顶部状态栏
-                    const TopStatusBar(),
-                    const SizedBox(height: 20),
-                    // 主面板
-                    _buildDashboard(trainState),
-                  ],
-                ),
-              ),
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Column(
+              children: [
+                const TopStatusBar(),
+                const SizedBox(height: 5),
+                Expanded(child: _buildDashboard(ts)),
+              ],
             ),
           ),
         ),
@@ -194,235 +127,142 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     );
   }
 
-  Widget _buildDashboard(TrainState trainState) {
+  Widget _buildDashboard(TrainState ts) {
     return Container(
-      width: 1260,
-      height: 800,
       decoration: BoxDecoration(
         gradient: TrainTheme.dashboardGradient,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: TrainTheme.dashboardOuterShadow,
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: const [
+          BoxShadow(color: Color(0xCC000000), offset: Offset(0, 12), blurRadius: 30),
+          BoxShadow(color: Color(0x1AFFFFFF), offset: Offset(0, 1), blurRadius: 1),
+        ],
       ),
       child: Stack(
         children: [
-          // 四角螺丝
-          const Positioned(top: 10, left: 10, child: ScrewWidget()),
-          const Positioned(top: 10, right: 10, child: ScrewWidget()),
-          const Positioned(bottom: 10, left: 10, child: ScrewWidget()),
-          const Positioned(bottom: 10, right: 10, child: ScrewWidget()),
-
-          // 三面板主体
+          const Positioned(top: 7, left: 7, child: ScrewWidget(size: 14)),
+          const Positioned(top: 7, right: 7, child: ScrewWidget(size: 14)),
+          const Positioned(bottom: 7, left: 7, child: ScrewWidget(size: 14)),
+          const Positioned(bottom: 7, right: 7, child: ScrewWidget(size: 14)),
           Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(10),
             child: Row(
               children: [
-                // 左面板: 方向控制
-                Expanded(
-                  flex: 10,
-                  child: _buildPanel(
-                    child: const DirectionPanel(),
-                  ),
-                ),
-                const SizedBox(width: 20),
-                // 中面板: 仪表+按钮
-                Expanded(
-                  flex: 13,
-                  child: _buildPanel(
-                    child: _buildCenterPanel(),
-                  ),
-                ),
-                const SizedBox(width: 20),
-                // 右面板: 油门+重联
-                Expanded(
-                  flex: 10,
-                  child: _buildPanel(
-                    child: _buildRightPanel(),
-                  ),
-                ),
+                Expanded(flex: 10, child: _panel(child: const DirectionPanel())),
+                const SizedBox(width: 8),
+                Expanded(flex: 13, child: _panel(child: _centerPanel())),
+                const SizedBox(width: 8),
+                Expanded(flex: 8, child: _panel(child: _rightPanel())),
               ],
             ),
           ),
-
-          // 补机只读覆盖层
-          if (trainState.isSlave) _buildSlaveOverlay(),
+          if (ts.isSlave) _slaveOverlay(),
         ],
       ),
     );
   }
 
-  Widget _buildPanel({required Widget child}) {
+  Widget _panel({required Widget child}) {
     return Container(
       decoration: TrainTheme.panelDecoration,
       child: Stack(
         children: [
-          const Positioned(top: 10, left: 10, child: ScrewWidget(size: 14)),
-          const Positioned(top: 10, right: 10, child: ScrewWidget(size: 14)),
-          const Positioned(
-              bottom: 10, left: 10, child: ScrewWidget(size: 14)),
-          const Positioned(
-              bottom: 10, right: 10, child: ScrewWidget(size: 14)),
+          const Positioned(top: 5, left: 5, child: ScrewWidget(size: 10)),
+          const Positioned(top: 5, right: 5, child: ScrewWidget(size: 10)),
+          const Positioned(bottom: 5, left: 5, child: ScrewWidget(size: 10)),
+          const Positioned(bottom: 5, right: 5, child: ScrewWidget(size: 10)),
           child,
         ],
       ),
     );
   }
 
-  Widget _buildCenterPanel() {
+  Widget _centerPanel() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // 速度表盘
-          const Speedometer(),
-          const SizedBox(height: 15),
-          // 功能按钮
+          const Expanded(flex: 5, child: Speedometer()),
+          const SizedBox(height: 8),
           const ControlButtons(),
-          const SizedBox(height: 15),
-          // 紧急停车
-          const EmergencyStop(),
+          const SizedBox(height: 8),
+          const Expanded(flex: 3, child: MuMonitor()),
         ],
       ),
     );
   }
 
-  Widget _buildRightPanel() {
+  Widget _rightPanel() {
     return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      child: Row(
         children: [
-          // 重联监视器
-          const MuMonitor(),
-          const SizedBox(height: 15),
-          // 油门 + LED
-          Expanded(
-            child: Row(
-              children: [
-                // 油门拉杆
-                const Expanded(
-                  flex: 4,
-                  child: ThrottleLever(),
-                ),
-                const SizedBox(width: 15),
-                // LED 档位条
-                const Expanded(
-                  flex: 2,
-                  child: LedBar(),
-                ),
-                const SizedBox(width: 8),
-                // 档位标签
-                _buildNotchLabels(),
-              ],
-            ),
-          ),
+          const Expanded(flex: 5, child: ThrottleLever()),
+          const SizedBox(width: 6),
+          const SizedBox(width: 26, child: LedBar()),
+          const SizedBox(width: 3),
+          SizedBox(width: 36, child: _notchLabels()),
         ],
       ),
     );
   }
 
-  Widget _buildNotchLabels() {
-    return SizedBox(
-      width: 55,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: List.generate(9, (index) {
-          final notch = 8 - index;
-          final isLabeled = notch == 0 || notch == 4 || notch == 8;
-          final color = notch <= 2
-              ? TrainTheme.glowGreen
-              : notch <= 5
-                  ? const Color(0xFFF1C40F)
-                  : TrainTheme.glowRed;
-
-          if (!isLabeled) return const SizedBox(height: 40);
-
-          return SizedBox(
-            height: 40,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  'NOTCH',
-                  style: GoogleFonts.rajdhani(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: color,
-                    shadows: [
-                      Shadow(color: color.withOpacity(0.5), blurRadius: 5),
-                    ],
-                  ),
-                ),
-                Text(
-                  '$notch',
-                  style: GoogleFonts.rajdhani(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
-                    color: color,
-                    shadows: [
-                      Shadow(color: color.withOpacity(0.5), blurRadius: 5),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          );
-        }),
-      ),
+  Widget _notchLabels() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: List.generate(9, (i) {
+        final notch = 8 - i;
+        final show = notch == 0 || notch == 4 || notch == 8;
+        final color = notch <= 2
+            ? TrainTheme.glowGreen
+            : notch <= 5
+                ? TrainTheme.glowYellow
+                : TrainTheme.glowRed;
+        if (!show) return const Expanded(child: SizedBox());
+        return Expanded(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text('N', style: TrainTheme.rajdhaniStyle(fontSize: 7, color: color)),
+              Text('$notch', style: TrainTheme.rajdhaniStyle(
+                fontSize: 14, fontWeight: FontWeight.w900, color: color,
+                shadows: [Shadow(color: color.withOpacity(0.5), blurRadius: 4)],
+              )),
+            ],
+          ),
+        );
+      }),
     );
   }
 
-  /// 补机模式覆盖层
-  Widget _buildSlaveOverlay() {
+  Widget _slaveOverlay() {
     return Positioned.fill(
       child: Container(
-        margin: const EdgeInsets.all(20),
+        margin: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: Colors.black.withOpacity(0.6),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Center(
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
             decoration: BoxDecoration(
               color: const Color(0xFF0A0E14),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                  color: TrainTheme.glowCyan.withOpacity(0.3), width: 2),
-              boxShadow: [
-                BoxShadow(
-                  color: TrainTheme.glowCyan.withOpacity(0.1),
-                  blurRadius: 20,
-                ),
-              ],
+              border: Border.all(color: TrainTheme.glowCyan.withOpacity(0.3), width: 2),
+              boxShadow: [BoxShadow(color: TrainTheme.glowCyan.withOpacity(0.1), blurRadius: 20)],
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('🚂', style: TextStyle(fontSize: 40)),
-                const SizedBox(height: 12),
-                Text(
-                  '重联运行中',
-                  style: GoogleFonts.rajdhani(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                    color: TrainTheme.glowCyan,
-                    shadows: [
-                      Shadow(
-                        color: TrainTheme.glowCyan.withOpacity(0.5),
-                        blurRadius: 10,
-                      ),
-                    ],
-                  ),
-                ),
+                const Text('🚂', style: TextStyle(fontSize: 32)),
                 const SizedBox(height: 8),
-                Text(
-                  '本务机控制中 — 操控权已移交',
-                  style: GoogleFonts.rajdhani(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: TrainTheme.textDim,
-                  ),
-                ),
+                Text('重联运行中', style: TrainTheme.rajdhaniStyle(
+                  fontSize: 20, fontWeight: FontWeight.w900, color: TrainTheme.glowCyan,
+                )),
+                const SizedBox(height: 4),
+                Text('本务机控制中 — 操控权已移交', style: TrainTheme.rajdhaniStyle(
+                  fontSize: 12, color: TrainTheme.textDim,
+                )),
               ],
             ),
           ),

@@ -1,15 +1,9 @@
-/// BLE 蓝牙通信服务
-///
-/// 封装 flutter_blue_plus 的扫描、连接、特征读写、通知订阅等操作。
-/// 提供指令发送节流、自动重连、断连检测等功能。
-
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../utils/constants.dart';
 
-/// BLE 连接状态
 enum BleConnectionState {
   disconnected,
   scanning,
@@ -18,75 +12,88 @@ enum BleConnectionState {
   reconnecting,
 }
 
-/// BLE 服务类
 class BleService {
-  BleService();
-
-  // 当前连接的设备
   BluetoothDevice? _device;
   BluetoothDevice? get device => _device;
 
-  // 特征引用
   BluetoothCharacteristic? _controlChar;
   BluetoothCharacteristic? _statusChar;
-  BluetoothCharacteristic? _versionChar;
 
-  // 状态流
-  final _connectionStateController =
-      StreamController<BleConnectionState>.broadcast();
-  Stream<BleConnectionState> get connectionStateStream =>
-      _connectionStateController.stream;
+  final _connectionStateCtrl = StreamController<BleConnectionState>.broadcast();
+  Stream<BleConnectionState> get connectionStateStream => _connectionStateCtrl.stream;
 
-  final _statusDataController = StreamController<String>.broadcast();
-  Stream<String> get statusDataStream => _statusDataController.stream;
+  final _statusDataCtrl = StreamController<String>.broadcast();
+  Stream<String> get statusDataStream => _statusDataCtrl.stream;
 
-  // 内部状态
-  BleConnectionState _currentState = BleConnectionState.disconnected;
-  BleConnectionState get currentState => _currentState;
+  BleConnectionState _state = BleConnectionState.disconnected;
+  BleConnectionState get currentState => _state;
 
-  StreamSubscription? _scanSubscription;
-  StreamSubscription? _deviceStateSubscription;
-  StreamSubscription? _notifySubscription;
-
-  // 指令节流
-  DateTime _lastCommandTime = DateTime.now();
+  StreamSubscription<BluetoothConnectionState>? _deviceStateSub;
+  StreamSubscription<List<int>>? _notifySub;
+  DateTime _lastCmdTime = DateTime.now();
   Timer? _throttleTimer;
-  String? _pendingCommand;
-
-  // 重连
+  String? _pendingCmd;
   int _reconnectAttempts = 0;
   Timer? _reconnectTimer;
   bool _intentionalDisconnect = false;
+  bool _disposed = false;
 
-  /// 更新连接状态
-  void _setState(BleConnectionState state) {
-    _currentState = state;
-    _connectionStateController.add(state);
+  void _setState(BleConnectionState s) {
+    if (_disposed) return;
+    _state = s;
+    if (!_connectionStateCtrl.isClosed) {
+      _connectionStateCtrl.add(s);
+    }
   }
 
-  /// 开始扫描 BLE 设备
+  /// 检查蓝牙是否可用
+  Future<bool> isBluetoothAvailable() async {
+    try {
+      final supported = await FlutterBluePlus.isSupported;
+      if (!supported) return false;
+
+      final state = await FlutterBluePlus.adapterState.first.timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => BluetoothAdapterState.unknown,
+      );
+      return state == BluetoothAdapterState.on;
+    } catch (e) {
+      debugPrint('BT check error: $e');
+      return false;
+    }
+  }
+
   Future<Stream<List<ScanResult>>> startScan() async {
     _setState(BleConnectionState.scanning);
+    try {
+      // 先检查蓝牙状态
+      final available = await isBluetoothAvailable();
+      if (!available) {
+        debugPrint('BLE: Bluetooth not available');
+        _setState(BleConnectionState.disconnected);
+        return FlutterBluePlus.scanResults;
+      }
 
-    // 停止之前的扫描
-    await FlutterBluePlus.stopScan();
-
-    // 开始扫描，过滤设备名
-    await FlutterBluePlus.startScan(
-      timeout: const Duration(seconds: 15),
-      withNames: [BleConstants.deviceNameFilter],
-    );
-
+      await FlutterBluePlus.stopScan();
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 15),
+        withNames: [BleConstants.deviceNameFilter],
+      );
+    } catch (e) {
+      debugPrint('Scan error: $e');
+      _setState(BleConnectionState.disconnected);
+    }
     return FlutterBluePlus.scanResults;
   }
 
-  /// 停止扫描
   Future<void> stopScan() async {
-    await FlutterBluePlus.stopScan();
-    _scanSubscription?.cancel();
+    try {
+      await FlutterBluePlus.stopScan();
+    } catch (e) {
+      debugPrint('Stop scan error: $e');
+    }
   }
 
-  /// 连接到设备
   Future<bool> connectToDevice(BluetoothDevice device) async {
     try {
       _setState(BleConnectionState.connecting);
@@ -94,221 +101,200 @@ class BleService {
       _intentionalDisconnect = false;
       _reconnectAttempts = 0;
 
-      // 连接设备
       await device.connect(
         timeout: const Duration(seconds: 10),
         autoConnect: false,
       );
 
-      // 发现服务
-      final services = await device.discoverServices();
+      // 等待一下确保连接稳定
+      await Future.delayed(const Duration(milliseconds: 500));
 
-      // 找到目标服务
-      BluetoothService? targetService;
-      for (final service in services) {
-        if (service.uuid == BleConstants.serviceUuid) {
-          targetService = service;
+      List<BluetoothService> services;
+      try {
+        services = await device.discoverServices();
+      } catch (e) {
+        debugPrint('Discover services error: $e');
+        try { await device.disconnect(); } catch (_) {}
+        _setState(BleConnectionState.disconnected);
+        return false;
+      }
+
+      BluetoothService? svc;
+      for (final s in services) {
+        if (s.uuid == BleConstants.serviceUuid) {
+          svc = s;
           break;
         }
       }
-
-      if (targetService == null) {
-        debugPrint('BLE: 未找到目标服务');
-        await device.disconnect();
+      if (svc == null) {
+        debugPrint('BLE: Target service not found');
+        try { await device.disconnect(); } catch (_) {}
         _setState(BleConnectionState.disconnected);
         return false;
       }
 
-      // 找到特征
-      for (final char in targetService.characteristics) {
-        if (char.uuid == BleConstants.controlCharUuid) {
-          _controlChar = char;
-        } else if (char.uuid == BleConstants.statusCharUuid) {
-          _statusChar = char;
-        } else if (char.uuid == BleConstants.versionCharUuid) {
-          _versionChar = char;
-        }
+      _controlChar = null;
+      _statusChar = null;
+      for (final c in svc.characteristics) {
+        if (c.uuid == BleConstants.controlCharUuid) _controlChar = c;
+        if (c.uuid == BleConstants.statusCharUuid) _statusChar = c;
       }
-
       if (_controlChar == null || _statusChar == null) {
-        debugPrint('BLE: 未找到必要特征');
-        await device.disconnect();
+        debugPrint('BLE: Required characteristics not found');
+        try { await device.disconnect(); } catch (_) {}
         _setState(BleConnectionState.disconnected);
         return false;
       }
 
-      // 订阅状态通知
-      await _subscribeToStatus();
+      // 订阅通知
+      try {
+        await _statusChar!.setNotifyValue(true);
+      } catch (e) {
+        debugPrint('BLE: Set notify error: $e');
+      }
 
-      // 监听设备断连
-      _deviceStateSubscription?.cancel();
-      _deviceStateSubscription =
-          device.connectionState.listen((state) {
-        if (state == BluetoothConnectionState.disconnected) {
-          _handleDisconnection();
-        }
-      });
+      _notifySub?.cancel();
+      _notifySub = _statusChar!.onValueReceived.listen(
+        (v) {
+          if (!_disposed && !_statusDataCtrl.isClosed) {
+            try {
+              _statusDataCtrl.add(utf8.decode(v));
+            } catch (e) {
+              debugPrint('Decode status error: $e');
+            }
+          }
+        },
+        onError: (e) {
+          debugPrint('Notify stream error: $e');
+        },
+      );
+
+      // 监听断连
+      _deviceStateSub?.cancel();
+      _deviceStateSub = device.connectionState.listen(
+        (s) {
+          if (s == BluetoothConnectionState.disconnected) {
+            _handleDisconnection();
+          }
+        },
+        onError: (e) {
+          debugPrint('Connection state stream error: $e');
+        },
+      );
 
       _setState(BleConnectionState.connected);
-      debugPrint('BLE: 已连接 ${device.platformName}');
+      debugPrint('BLE: Connected to ${device.platformName}');
       return true;
     } catch (e) {
-      debugPrint('BLE 连接错误: $e');
+      debugPrint('BLE connect error: $e');
       _setState(BleConnectionState.disconnected);
       return false;
     }
   }
 
-  /// 订阅状态通知
-  Future<void> _subscribeToStatus() async {
-    if (_statusChar == null) return;
-
-    try {
-      await _statusChar!.setNotifyValue(true);
-      _notifySubscription?.cancel();
-      _notifySubscription = _statusChar!.onValueReceived.listen((value) {
-        final data = utf8.decode(value);
-        _statusDataController.add(data);
-      });
-    } catch (e) {
-      debugPrint('BLE 订阅状态通知失败: $e');
-    }
-  }
-
-  /// 发送指令（带节流）
-  Future<void> sendCommand(String command, {bool throttle = true}) async {
-    if (_controlChar == null || _currentState != BleConnectionState.connected) {
-      debugPrint('BLE: 无法发送指令，未连接');
-      return;
-    }
-
+  Future<void> sendCommand(String cmd, {bool throttle = true}) async {
+    if (_controlChar == null || _state != BleConnectionState.connected) return;
     if (throttle) {
-      final now = DateTime.now();
-      final elapsed = now.difference(_lastCommandTime).inMilliseconds;
-
+      final elapsed = DateTime.now().difference(_lastCmdTime).inMilliseconds;
       if (elapsed < BleConstants.commandThrottleMs) {
-        // 节流：保存待发指令，延迟发送
-        _pendingCommand = command;
+        _pendingCmd = cmd;
         _throttleTimer?.cancel();
         _throttleTimer = Timer(
-          Duration(
-              milliseconds: BleConstants.commandThrottleMs - elapsed),
+          Duration(milliseconds: BleConstants.commandThrottleMs - elapsed),
           () {
-            if (_pendingCommand != null) {
-              _doSendCommand(_pendingCommand!);
-              _pendingCommand = null;
+            if (_pendingCmd != null) {
+              _doSend(_pendingCmd!);
+              _pendingCmd = null;
             }
           },
         );
         return;
       }
     }
-
-    await _doSendCommand(command);
+    await _doSend(cmd);
   }
 
-  /// 立即发送指令（不节流）
-  Future<void> sendCommandImmediate(String command) async {
-    await sendCommand(command, throttle: false);
-  }
+  Future<void> sendImmediate(String cmd) => sendCommand(cmd, throttle: false);
 
-  /// 实际发送指令
-  Future<void> _doSendCommand(String command) async {
-    if (_controlChar == null || _currentState != BleConnectionState.connected) {
-      return;
-    }
-
+  Future<void> _doSend(String cmd) async {
+    if (_disposed) return;
+    if (_controlChar == null || _state != BleConnectionState.connected) return;
     try {
-      final bytes = utf8.encode(command);
-      await _controlChar!.write(bytes, withoutResponse: true);
-      _lastCommandTime = DateTime.now();
-      debugPrint('BLE TX: $command');
+      await _controlChar!.write(utf8.encode(cmd), withoutResponse: true);
+      _lastCmdTime = DateTime.now();
+      debugPrint('BLE TX: $cmd');
     } catch (e) {
-      debugPrint('BLE 发送失败: $e');
+      debugPrint('BLE send error: $e');
     }
   }
 
-  /// 读取固件版本
-  Future<String?> readFirmwareVersion() async {
-    if (_versionChar == null) return null;
-    try {
-      final value = await _versionChar!.read();
-      return utf8.decode(value);
-    } catch (e) {
-      debugPrint('BLE 读取版本失败: $e');
-      return null;
-    }
-  }
-
-  /// 处理断连
   void _handleDisconnection() {
+    if (_disposed) return;
     if (_intentionalDisconnect) {
       _setState(BleConnectionState.disconnected);
       return;
     }
-
-    debugPrint('BLE: 意外断连，尝试重连...');
+    debugPrint('BLE: Unexpected disconnect, reconnecting...');
     _setState(BleConnectionState.reconnecting);
     _attemptReconnect();
   }
 
-  /// 尝试重连
   void _attemptReconnect() {
+    if (_disposed) return;
     if (_reconnectAttempts >= BleConstants.maxReconnectAttempts) {
-      debugPrint('BLE: 重连失败，已达最大次数');
+      debugPrint('BLE: Max reconnect attempts reached');
       _setState(BleConnectionState.disconnected);
       _reconnectAttempts = 0;
       return;
     }
-
     _reconnectAttempts++;
-    debugPrint('BLE: 重连尝试 $_reconnectAttempts/${BleConstants.maxReconnectAttempts}');
-
+    debugPrint('BLE: Reconnect attempt $_reconnectAttempts');
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(
       Duration(seconds: BleConstants.reconnectIntervalSec),
       () async {
-        if (_device != null &&
-            _currentState == BleConnectionState.reconnecting) {
-          final success = await connectToDevice(_device!);
-          if (!success) {
-            _attemptReconnect();
-          }
+        if (_disposed) return;
+        if (_device != null && _state == BleConnectionState.reconnecting) {
+          final ok = await connectToDevice(_device!);
+          if (!ok && !_disposed) _attemptReconnect();
         }
       },
     );
   }
 
-  /// 主动断开连接
   Future<void> disconnect() async {
     _intentionalDisconnect = true;
     _throttleTimer?.cancel();
     _reconnectTimer?.cancel();
-    _notifySubscription?.cancel();
-    _deviceStateSubscription?.cancel();
+    _notifySub?.cancel();
+    _notifySub = null;
+    _deviceStateSub?.cancel();
+    _deviceStateSub = null;
 
     try {
       await _device?.disconnect();
     } catch (e) {
-      debugPrint('BLE 断连错误: $e');
+      debugPrint('Disconnect error: $e');
     }
-
     _device = null;
     _controlChar = null;
     _statusChar = null;
-    _versionChar = null;
     _setState(BleConnectionState.disconnected);
   }
 
-  /// 释放资源
   void dispose() {
+    _disposed = true;
     _intentionalDisconnect = true;
     _throttleTimer?.cancel();
     _reconnectTimer?.cancel();
-    _scanSubscription?.cancel();
-    _notifySubscription?.cancel();
-    _deviceStateSubscription?.cancel();
-    _connectionStateController.close();
-    _statusDataController.close();
+    _notifySub?.cancel();
+    _deviceStateSub?.cancel();
+
+    if (!_connectionStateCtrl.isClosed) {
+      _connectionStateCtrl.close();
+    }
+    if (!_statusDataCtrl.isClosed) {
+      _statusDataCtrl.close();
+    }
   }
 }

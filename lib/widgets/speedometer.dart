@@ -1,12 +1,5 @@
-/// 速度表盘组件
-///
-/// 使用 SpeedometerPainter 绘制表盘，AnimationController 驱动指针平滑动画。
-/// 中央数字显示当前档位 (LV)，单位 NOTCH。
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_fonts/google_fonts.dart';
-
 import '../theme/train_theme.dart';
 import '../providers/train_provider.dart';
 import '../utils/constants.dart';
@@ -21,125 +14,101 @@ class Speedometer extends ConsumerStatefulWidget {
 
 class _SpeedometerState extends ConsumerState<Speedometer>
     with SingleTickerProviderStateMixin {
-  late AnimationController _needleController;
-  late Animation<double> _needleAnimation;
-  double _currentNeedleValue = 0;
+  late AnimationController _ctrl;
+  late Animation<double> _anim;
+  double _cur = 0;
 
   @override
   void initState() {
     super.initState();
-    _needleController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 150),
-    );
-    _needleAnimation =
-        Tween<double>(begin: 0, end: 0).animate(
-      CurvedAnimation(parent: _needleController, curve: Curves.easeOut),
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 150));
+    _anim = Tween<double>(begin: 0, end: 0).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeOut),
     );
   }
 
   @override
   void dispose() {
-    _needleController.dispose();
+    _ctrl.dispose();
     super.dispose();
   }
 
-  void _updateNeedle(double targetValue) {
-    if ((_currentNeedleValue - targetValue).abs() < 0.001) return;
-
-    _needleAnimation = Tween<double>(
-      begin: _currentNeedleValue,
-      end: targetValue,
-    ).animate(
-      CurvedAnimation(parent: _needleController, curve: Curves.easeOut),
+  void _update(double target) {
+    if ((_cur - target).abs() < 0.002) return;
+    _anim = Tween<double>(begin: _cur, end: target).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeOut),
     );
-
-    _needleController.forward(from: 0);
-    _currentNeedleValue = targetValue;
+    _ctrl.forward(from: 0);
+    _cur = target;
   }
 
   @override
   Widget build(BuildContext context) {
-    final trainState = ref.watch(trainStateProvider);
+    final ts = ref.watch(trainStateProvider);
+    final target = (ts.actualPwm / BleConstants.maxPwm).clamp(0.0, 1.0);
+    _update(target);
 
-    // APWM (0~255) → 表盘值 (0~1)
-    final targetNeedleValue =
-        trainState.actualPwm / BleConstants.maxPwm.toDouble();
-    _updateNeedle(targetNeedleValue.clamp(0.0, 1.0));
-
-    return SizedBox(
-      width: 320,
-      height: 320,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          // 表盘
-          AnimatedBuilder(
-            animation: _needleAnimation,
-            builder: (context, child) {
-              return CustomPaint(
-                size: const Size(320, 320),
+    return LayoutBuilder(builder: (ctx, box) {
+      final sz =
+          (box.maxWidth < box.maxHeight ? box.maxWidth : box.maxHeight);
+      return SizedBox(
+        width: sz,
+        height: sz,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            AnimatedBuilder(
+              animation: _anim,
+              builder: (_, __) => CustomPaint(
+                size: Size(sz, sz),
                 painter: SpeedometerPainter(
-                  needleValue: _needleAnimation.value,
-                  outerRadius: 145,
+                  needleValue: _anim.value,
+                  outerRadius: sz / 2 - 8,
                 ),
-              );
-            },
-          ),
-
-          // 中央数字显示
-          Positioned(
-            bottom: 50,
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.6),
-                borderRadius: BorderRadius.circular(6),
-                border:
-                    Border.all(color: const Color(0xFF222222), width: 1),
-                boxShadow: [
-                  const BoxShadow(
-                    color: Color(0x80000000),
-                    offset: Offset(0, 2),
-                    blurRadius: 5,
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '${trainState.level}',
-                    style: GoogleFonts.orbitron(
-                      fontSize: 45,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white,
-                      height: 1,
-                      shadows: [
-                        Shadow(
-                          color: Colors.white.withOpacity(0.5),
-                          blurRadius: 10,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'NOTCH',
-                    style: GoogleFonts.rajdhani(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: const Color(0xFF88C0D0),
-                      letterSpacing: 2,
-                    ),
-                  ),
-                ],
               ),
             ),
-          ),
-        ],
-      ),
-    );
+            Positioned(
+              bottom: sz * 0.12,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.6),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: const Color(0xFF222222)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '${ts.level}',
+                      style: TrainTheme.orbitronStyle(
+                        fontSize: sz * 0.12,
+                        color: Colors.white,
+                        height: 1,
+                        shadows: [
+                          Shadow(
+                              color: Colors.white.withOpacity(0.5),
+                              blurRadius: 8)
+                        ],
+                      ),
+                    ),
+                    Text(
+                      'NOTCH',
+                      style: TrainTheme.rajdhaniStyle(
+                        fontSize: sz * 0.04,
+                        color: const Color(0xFF88C0D0),
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    });
   }
 }
