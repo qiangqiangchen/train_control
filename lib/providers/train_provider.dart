@@ -178,10 +178,11 @@ class TrainStateNotifier extends StateNotifier<TrainState> {
     if (!mounted || state.isSlave) return;
     notch = notch.clamp(0, BleConstants.maxNotch);
     _localNotch = notch;
-    if (notch == 0) {
-      _ble.sendCommand(BleCommands.stop);
-      return;
-    }
+    // 速度为0，不切换到停止状态
+    // if (notch == 0) {
+    //   _ble.sendCommand(BleCommands.stop);
+    //   return;
+    // }
     if (_localDir == TrainDirection.stop) _localDir = _lastNonStop;
     final cmd = _localDir == TrainDirection.reverse
         ? BleCommands.reverse(notch)
@@ -194,10 +195,11 @@ class TrainStateNotifier extends StateNotifier<TrainState> {
     if (!mounted || state.isSlave) return;
     notch = notch.clamp(0, BleConstants.maxNotch);
     _localNotch = notch;
-    if (notch == 0) {
-      _ble.sendImmediate(BleCommands.stop);
-      return;
-    }
+    // 速度为0，不切换到停止状态
+    // if (notch == 0) {
+    //   _ble.sendImmediate(BleCommands.stop);
+    //   return;
+    // }
     if (_localDir == TrainDirection.stop) _localDir = _lastNonStop;
     final cmd = _localDir == TrainDirection.reverse
         ? BleCommands.reverse(notch)

@@ -9,6 +9,7 @@ class StateParser {
       return TrainState(error: _parseError(trimmed), rawData: trimmed);
     }
 
+
     final Map<String, String> fields = {};
     for (final part in trimmed.split(' ')) {
       final i = part.indexOf(':');
@@ -35,6 +36,7 @@ class StateParser {
       slaveBattery: int.tryParse(fields['SBAT'] ?? ''),
       slaveBatteryVoltage: double.tryParse(fields['SBATV'] ?? ''),
       speedCoefficient: double.tryParse(fields['SK'] ?? ''),
+      speed:int.tryParse(fields['SPD'] ?? '') ?? 0,
       slaveWarning: fields['SWARN'] == '1',
       firmwareVersion: fields['FW'] ?? '',
       error: TrainError.none,

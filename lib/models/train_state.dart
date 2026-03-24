@@ -33,6 +33,8 @@ class TrainState {
   final String firmwareVersion;
   final TrainError error;
   final String rawData;
+  final bool isBraking;
+  final int speed; // 新增：速度 km/h，由 ESP32 上报
 
   const TrainState({
     this.cab = CabEnd.a,
@@ -58,6 +60,8 @@ class TrainState {
     this.firmwareVersion = '',
     this.error = TrainError.none,
     this.rawData = '',
+    this.isBraking = false,
+    this.speed = 0,
   });
 
   bool get isRunning => actualPwm > 0;
@@ -74,7 +78,7 @@ class TrainState {
     CoupleStatus? coupleStatus, String? inviterMac, CabEnd? slaveCab,
     int? slaveActualPwm, int? slaveBattery, double? slaveBatteryVoltage,
     double? speedCoefficient, bool? slaveWarning, String? firmwareVersion,
-    TrainError? error, String? rawData,
+    TrainError? error, String? rawData, bool? isBraking, int? speed,
   }) {
     return TrainState(
       cab: cab ?? this.cab,
@@ -100,6 +104,8 @@ class TrainState {
       firmwareVersion: firmwareVersion ?? this.firmwareVersion,
       error: error ?? this.error,
       rawData: rawData ?? this.rawData,
+      isBraking: isBraking ?? this.isBraking,
+      speed: speed ?? this.speed,
     );
   }
 }

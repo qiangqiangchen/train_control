@@ -72,6 +72,14 @@
 #define RAMP_INTERVAL   20   // ms
 
 // ============================================================================
+// 速度参数（根据实际车辆调整）
+// ============================================================================
+#define MAX_SPEED_KMH    160    // 最高速度 km/h（对应 MAX_PWM）
+#define MIN_SPEED_KMH    10     // 最低速度 km/h（对应 MIN_PWM）
+
+
+
+// ============================================================================
 // 演示模式
 // ============================================================================
 #define DEMO_WAIT_TIME  20000
@@ -323,6 +331,27 @@ void applyMotorPWM(uint8_t dir, uint16_t pwm) {
   ledcWrite(PWM_CH_IN1, rev ? 0 : pwm);
   ledcWrite(PWM_CH_IN2, rev ? pwm : 0);
 }
+
+
+// ============================================================================
+// 速度计算
+// ============================================================================
+
+/**
+ * 将实际 PWM 值映射为速度 (km/h)
+ * PWM=0 → 0 km/h
+ * PWM=MIN_PWM → MIN_SPEED_KMH
+ * PWM=MAX_PWM → MAX_SPEED_KMH
+ * 中间线性插值
+ */
+uint16_t pwmToSpeed(uint16_t pwm) {
+  if (pwm == 0) return 0;
+  if (pwm <= MIN_PWM) return MIN_SPEED_KMH;
+  if (pwm >= MAX_PWM) return MAX_SPEED_KMH;
+  return MIN_SPEED_KMH + 
+         (uint32_t)(pwm - MIN_PWM) * (MAX_SPEED_KMH - MIN_SPEED_KMH) / (MAX_PWM - MIN_PWM);
+}
+
 
 // ============================================================================
 // 灯光
@@ -617,6 +646,10 @@ void sendStatus() {
 
   // 低电量警告标志
   if (batteryPct <= BATT_LOW_PCT) APPEND(" BLOW:1");
+
+  // ★ 新增：速度字段
+  uint16_t spd = pwmToSpeed(actualPWM);
+  APPEND(" SPD:%d", (int)spd);
 
   // 重联字段
   switch (roleState) {
