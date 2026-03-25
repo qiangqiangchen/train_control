@@ -1,5 +1,10 @@
 allprojects {
     repositories {
+        // 仓库优先级：国内镜像 > 官方仓库，提升下载速度
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        maven { url = uri("https://maven.aliyun.com/repository/public") }
+        maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
         google()
         mavenCentral()
     }
