@@ -1,7 +1,17 @@
 /**
  * ============================================================================
- * 🚂 BLE 遥控火车 — 终极固件 (含双机重联) v1.5
+ * 🚂 BLE 遥控火车 — 终极固件 (含双机重联) v1.6
  * ============================================================================
+ *
+ * v1.6 修改:
+ *   - 修复 ESP-NOW 重联广播不可靠的问题
+ *   - addEspNowPeer 明确指定 channel=1
+ *   - 邀请广播每次发3包提高接收概率
+ *   - 发邀请前重新固定WiFi信道 (防BLE导致漂移)
+ *   - loop中周期性检查WiFi信道
+ *   - 邀请间隔从500ms缩短到300ms
+ *   - 邀请期间BLE notify间隔适当增大释放射频
+ *   - 添加ESP-NOW收发调试日志
  *
  * v1.5 修改:
  *   - 取消固定周期状态上报
@@ -40,7 +50,7 @@
   #define DBGF(fmt, ...)    ((void)0)
 #endif
 
-#define FIRMWARE_VERSION  "1.5.0"
+#define FIRMWARE_VERSION  "1.6.0"
 
 // ============================================================================
 // 引脚
@@ -81,7 +91,6 @@
 #define MAX_SPEED_KMH 160
 #define MIN_SPEED_KMH 10
 
-
 // ============================================================================
 // 演示
 // ============================================================================
@@ -101,15 +110,23 @@
 // ============================================================================
 // ESP-NOW
 // ============================================================================
-#define ESPNOW_CMD_INTERVAL    100
-#define ESPNOW_STATUS_INTERVAL 200
-#define ESPNOW_INVITE_INTERVAL 500
-#define ESPNOW_INVITE_TIMEOUT  30000
-#define SLAVE_CMD_TIMEOUT      300
-#define MASTER_STATUS_WARN     1000
-#define MASTER_STATUS_TIMEOUT  3000
-#define UNCOUPLE_RETRY_COUNT   3
+#define ESPNOW_CMD_INTERVAL     100
+#define ESPNOW_STATUS_INTERVAL  200
+#define ESPNOW_INVITE_INTERVAL  300     // ★ v1.6: 从500ms缩短到300ms
+#define ESPNOW_INVITE_TIMEOUT   30000
+#define ESPNOW_INVITE_BURST     3       // ★ v1.6: 每次邀请发送包数
+#define ESPNOW_INVITE_BURST_GAP 10000   // ★ v1.6: 连发间隔 10ms (微秒)
+#define SLAVE_CMD_TIMEOUT       300
+#define MASTER_STATUS_WARN      1000
+#define MASTER_STATUS_TIMEOUT   3000
+#define UNCOUPLE_RETRY_COUNT    3
 #define UNCOUPLE_RETRY_INTERVAL 200
+
+// ============================================================================
+// WiFi 信道
+// ============================================================================
+#define ESPNOW_CHANNEL              1       // ★ v1.6: ESP-NOW 使用的固定信道
+#define WIFI_CHANNEL_CHECK_INTERVAL 5000    // ★ v1.6: 信道检查间隔 5秒
 
 // ============================================================================
 // BLE UUID
@@ -280,6 +297,15 @@ unsigned long lastLoopReport = 0;
 // 状态上报去重
 char lastStatusBuf[220] = {0};
 
+// ★ v1.6: WiFi信道检查
+unsigned long lastChannelCheck = 0;
+
+// ★ v1.6: ESP-NOW 发送统计 (调试用)
+uint32_t espnowTxCount   = 0;
+uint32_t espnowTxFail    = 0;
+uint32_t espnowRxCount   = 0;
+uint32_t espnowDelivFail = 0;
+
 // ============================================================================
 // 工具函数
 // ============================================================================
@@ -333,12 +359,36 @@ const char* motorStr() {
   }
 }
 
+// ★ v1.6: ESP-NOW 包类型名 (调试用)
+const char* pktTypeStr(uint8_t type) {
+  switch (type) {
+    case PKT_INVITE:       return "INVITE";
+    case PKT_ACCEPT:       return "ACCEPT";
+    case PKT_CMD:          return "CMD";
+    case PKT_STATUS:       return "STATUS";
+    case PKT_UNCOUPLE:     return "UNCOUPLE";
+    case PKT_UNCOUPLE_ACK: return "UNCOUPLE_ACK";
+    default:               return "UNKNOWN";
+  }
+}
+
 uint16_t pwmToSpeed(uint16_t pwm) {
   if (pwm == 0) return 0;
   if (pwm <= MIN_PWM) return MIN_SPEED_KMH;
   if (pwm >= MAX_PWM) return MAX_SPEED_KMH;
-  return MIN_SPEED_KMH + 
+  return MIN_SPEED_KMH +
          (uint32_t)(pwm - MIN_PWM) * (MAX_SPEED_KMH - MIN_SPEED_KMH) / (MAX_PWM - MIN_PWM);
+}
+
+// ★ v1.6: 确保WiFi信道正确
+void ensureWifiChannel() {
+  uint8_t primary;
+  wifi_second_chan_t second;
+  esp_wifi_get_channel(&primary, &second);
+  if (primary != ESPNOW_CHANNEL) {
+    DBGF("[WIFI] Channel drifted to %d, fixing to %d", primary, ESPNOW_CHANNEL);
+    esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  }
 }
 
 // ============================================================================
@@ -469,18 +519,38 @@ void sampleBattery() {
 // ESP-NOW 发送
 // ============================================================================
 
+// ★ v1.6: 添加发送结果日志和统计
 bool espnowSend(const uint8_t* dest, const void* data, size_t len) {
-  return esp_now_send(dest, (const uint8_t*)data, len) == ESP_OK;
+  esp_err_t err = esp_now_send(dest, (const uint8_t*)data, len);
+  espnowTxCount++;
+  if (err != ESP_OK) {
+    espnowTxFail++;
+    DBGF("[ESPNOW] TX FAIL err=%d dest=%02X:%02X:%02X:%02X:%02X:%02X type=0x%02X",
+         err, dest[0], dest[1], dest[2], dest[3], dest[4], dest[5],
+         ((const uint8_t*)data)[0]);
+    return false;
+  }
+  return true;
 }
 
+// ★ v1.6: 每次发3包，提高广播可靠性
 void sendInviteBroadcast() {
   uint8_t buf[1 + sizeof(InvitePayload)];
   buf[0] = PKT_INVITE;
   InvitePayload* p = (InvitePayload*)(buf + 1);
   memcpy(p->masterMAC, myMAC, 6);
   p->masterTailEnd = cabAtEndA ? 'B' : 'A';
-  uint8_t bc[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
-  espnowSend(bc, buf, sizeof(buf));
+  uint8_t bc[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+  for (int i = 0; i < ESPNOW_INVITE_BURST; i++) {
+    espnowSend(bc, buf, sizeof(buf));
+    if (i < ESPNOW_INVITE_BURST - 1) {
+      delayMicroseconds(ESPNOW_INVITE_BURST_GAP);
+    }
+  }
+
+  DBGF("[COUPLE] Invite broadcast sent (%d packets), tailEnd=%c",
+       ESPNOW_INVITE_BURST, cabAtEndA ? 'B' : 'A');
 }
 
 void sendAcceptPkt(const uint8_t* masterMAC, uint8_t coupleEnd) {
@@ -489,7 +559,16 @@ void sendAcceptPkt(const uint8_t* masterMAC, uint8_t coupleEnd) {
   AcceptPayload* p = (AcceptPayload*)(buf + 1);
   memcpy(p->slaveMAC, myMAC, 6);
   p->slaveCoupleEnd = coupleEnd;
-  espnowSend(masterMAC, buf, sizeof(buf));
+
+  // ★ v1.6: Accept 也发3次提高可靠性
+  for (int i = 0; i < 3; i++) {
+    espnowSend(masterMAC, buf, sizeof(buf));
+    if (i < 2) delayMicroseconds(ESPNOW_INVITE_BURST_GAP);
+  }
+
+  DBGF("[COUPLE] Accept sent to %02X:%02X:%02X:%02X:%02X:%02X end=%c",
+       masterMAC[0], masterMAC[1], masterMAC[2],
+       masterMAC[3], masterMAC[4], masterMAC[5], coupleEnd);
 }
 
 void sendCmdToSlave() {
@@ -522,22 +601,39 @@ void sendStatusToMaster() {
 void sendUncouplePkt() {
   uint8_t buf[1] = { PKT_UNCOUPLE };
   espnowSend(peerMAC, buf, 1);
+  DBGF("[COUPLE] Uncouple sent to %02X:%02X:%02X:%02X:%02X:%02X",
+       peerMAC[0], peerMAC[1], peerMAC[2],
+       peerMAC[3], peerMAC[4], peerMAC[5]);
 }
 
 void sendUncoupleAckPkt() {
   uint8_t buf[1] = { PKT_UNCOUPLE_ACK };
   espnowSend(peerMAC, buf, 1);
+  DBG("[COUPLE] Uncouple ACK sent");
 }
 
 // ============================================================================
 // 重联管理
 // ============================================================================
 
+// ★ v1.6: 明确指定信道，已存在时先删再加
 void addEspNowPeer(const uint8_t* mac) {
-  if (esp_now_is_peer_exist(mac)) return;
+  if (esp_now_is_peer_exist(mac)) {
+    esp_now_del_peer(mac);
+    DBGF("[ESPNOW] Peer deleted (re-add): %02X:%02X:%02X:%02X:%02X:%02X",
+         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  }
   esp_now_peer_info_t pi = {};
-  memcpy(pi.peer_addr, mac, 6); pi.channel = 0; pi.encrypt = false;
-  esp_now_add_peer(&pi);
+  memcpy(pi.peer_addr, mac, 6);
+  pi.channel = ESPNOW_CHANNEL;  // ★ v1.6: 明确指定信道，不用0
+  pi.encrypt = false;
+  esp_err_t err = esp_now_add_peer(&pi);
+  if (err == ESP_OK) {
+    DBGF("[ESPNOW] Peer added: %02X:%02X:%02X:%02X:%02X:%02X ch=%d",
+         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], ESPNOW_CHANNEL);
+  } else {
+    DBGF("[ESPNOW] Add peer FAILED: %d", err);
+  }
 }
 
 void enterMaster(const uint8_t* slaveMAC, uint8_t slvEnd) {
@@ -552,6 +648,9 @@ void enterMaster(const uint8_t* slaveMAC, uint8_t slvEnd) {
   cmdSeqNum = 0; uncoupleRetryLeft = 0;
   addEspNowPeer(peerMAC);
   updateLights();
+  DBGF("[COUPLE] Entered MASTER, slave=%02X:%02X:%02X:%02X:%02X:%02X end=%c",
+       slaveMAC[0], slaveMAC[1], slaveMAC[2],
+       slaveMAC[3], slaveMAC[4], slaveMAC[5], slvEnd);
 }
 
 void enterSlave(const uint8_t* masterMAC) {
@@ -559,9 +658,13 @@ void enterSlave(const uint8_t* masterMAC) {
   memcpy(peerMAC, masterMAC, 6);
   lastSlaveCmd = lastStatusSendTime = millis();
   addEspNowPeer(peerMAC);
+  DBGF("[COUPLE] Entered SLAVE, master=%02X:%02X:%02X:%02X:%02X:%02X",
+       masterMAC[0], masterMAC[1], masterMAC[2],
+       masterMAC[3], masterMAC[4], masterMAC[5]);
 }
 
 void exitCoupling() {
+  DBGF("[COUPLE] Exiting %s mode", roleStr());
   if (roleState == ROLE_MASTER || roleState == ROLE_SLAVE)
     esp_now_del_peer(peerMAC);
   roleState = ROLE_STANDALONE;
@@ -575,10 +678,17 @@ void exitCoupling() {
 // BLE 状态上报 — 纯事件驱动 + 去重
 // ============================================================================
 
+// ★ v1.6: 邀请期间增大 notify 间隔，释放射频给 ESP-NOW
 bool safeNotify(BLECharacteristic* pChar, const char* value) {
   if (!deviceConnected) return false;
   unsigned long now = millis();
-  if (now - lastNotifyTime < BLE_NOTIFY_MIN_GAP) return false;
+
+  unsigned long minGap = BLE_NOTIFY_MIN_GAP;
+  if (roleState == ROLE_INVITING) {
+    minGap = 100;  // ★ 邀请期间 100ms 间隔 (正常 50ms)
+  }
+
+  if (now - lastNotifyTime < minGap) return false;
   pChar->setValue(value);
   pChar->notify();
   lastNotifyTime = now;
@@ -596,7 +706,6 @@ void sendStatus() {
     if (n > 0 && pos + n < cap) pos += n; \
   } while(0)
 
-  // DIR 优先反映 targetDir
   const char* dirStr;
   if (targetDir == 1)       dirStr = "FWD";
   else if (targetDir == 2)  dirStr = "REV";
@@ -623,7 +732,7 @@ void sendStatus() {
   if (batteryPct <= BATT_LOW_PCT) APPEND(" BLOW:1");
 
   APPEND(" SPD:%d", (int)pwmToSpeed(actualPWM));
-  
+
   switch (roleState) {
     case ROLE_STANDALONE: APPEND(" CP:OFF"); break;
     case ROLE_INVITING:   APPEND(" CP:INVITING"); break;
@@ -645,7 +754,6 @@ void sendStatus() {
   APPEND(" FW:%s", FIRMWARE_VERSION);
   #undef APPEND
 
-  // 去重
   if (strcmp(buf, lastStatusBuf) == 0) return;
   strncpy(lastStatusBuf, buf, sizeof(lastStatusBuf) - 1);
   lastStatusBuf[sizeof(lastStatusBuf) - 1] = '\0';
@@ -675,7 +783,18 @@ void IRAM_ATTR onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len) {
   portEXIT_CRITICAL(&espnowRxMux);
 }
 
-void onEspNowSent(const uint8_t*, esp_now_send_status_t) {}
+// ★ v1.6: 添加发送确认日志
+void onEspNowSent(const uint8_t* mac, esp_now_send_status_t status) {
+  if (status != ESP_NOW_SEND_SUCCESS) {
+    espnowDelivFail++;
+    #if DEBUG_ENABLED
+    if (mac) {
+      DBGF("[ESPNOW] Delivery FAILED to %02X:%02X:%02X:%02X:%02X:%02X (total fails: %d)",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], espnowDelivFail);
+    }
+    #endif
+  }
+}
 
 void processEspNowRx() {
   if (!espnowRxPending) return;
@@ -691,11 +810,31 @@ void processEspNowRx() {
   uint8_t type = data[0];
   const uint8_t* pl = data + 1;
 
+  espnowRxCount++;
+
+  // ★ v1.6: 接收日志
+  DBGF("[ESPNOW] RX %s (0x%02X) len=%d from=%02X:%02X:%02X:%02X:%02X:%02X role=%s",
+       pktTypeStr(type), type, len,
+       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+       roleStr());
+
   switch (type) {
   case PKT_INVITE: {
-    if (roleState != ROLE_STANDALONE && roleState != ROLE_INVITED) return;
-    if (len < 1 + (int)sizeof(InvitePayload)) return;
+    if (roleState != ROLE_STANDALONE && roleState != ROLE_INVITED) {
+      DBGF("[COUPLE] Invite ignored, current role=%s", roleStr());
+      return;
+    }
+    if (len < 1 + (int)sizeof(InvitePayload)) {
+      DBGF("[COUPLE] Invite too short: %d bytes", len);
+      return;
+    }
     const InvitePayload* inv = (const InvitePayload*)pl;
+
+    DBGF("[COUPLE] Invite from %02X:%02X:%02X:%02X:%02X:%02X tailEnd=%c",
+         inv->masterMAC[0], inv->masterMAC[1], inv->masterMAC[2],
+         inv->masterMAC[3], inv->masterMAC[4], inv->masterMAC[5],
+         inv->masterTailEnd);
+
     if (demoState == DEMO_RUNNING) {
       demoState = DEMO_EXITING; soundEnabled = false;
       targetDir = targetLevel = targetPWM = 0;
@@ -705,17 +844,29 @@ void processEspNowRx() {
       roleState = ROLE_INVITED;
       slaveCoupleEnd = cabAtEndA ? 'A' : 'B';
       statusPushRequested = true;
+      DBG("[COUPLE] Demo interrupted by invite, exiting demo");
       return;
     }
     memcpy(inviterMAC, inv->masterMAC, 6);
     roleState = ROLE_INVITED;
     statusPushRequested = true;
+    DBG("[COUPLE] Role changed to INVITED");
     break;
   }
   case PKT_ACCEPT: {
-    if (roleState != ROLE_INVITING) return;
-    if (len < 1 + (int)sizeof(AcceptPayload)) return;
+    if (roleState != ROLE_INVITING) {
+      DBGF("[COUPLE] Accept ignored, current role=%s", roleStr());
+      return;
+    }
+    if (len < 1 + (int)sizeof(AcceptPayload)) {
+      DBGF("[COUPLE] Accept too short: %d bytes", len);
+      return;
+    }
     const AcceptPayload* acc = (const AcceptPayload*)pl;
+    DBGF("[COUPLE] Accept from %02X:%02X:%02X:%02X:%02X:%02X end=%c",
+         acc->slaveMAC[0], acc->slaveMAC[1], acc->slaveMAC[2],
+         acc->slaveMAC[3], acc->slaveMAC[4], acc->slaveMAC[5],
+         acc->slaveCoupleEnd);
     enterMaster(acc->slaveMAC, acc->slaveCoupleEnd);
     statusPushRequested = true;
     break;
@@ -748,7 +899,7 @@ void processEspNowRx() {
     slaveBatteryMV = st->batteryMV;
     slaveStatusValid = true; slaveStatusWarn = false;
     lastSlaveStatus = millis();
-    statusPushRequested = true;  // slave状态变化时通知App
+    statusPushRequested = true;
     break;
   }
   case PKT_UNCOUPLE: {
@@ -767,7 +918,9 @@ void processEspNowRx() {
     statusPushRequested = true;
     break;
   }
-  default: break;
+  default:
+    DBGF("[ESPNOW] Unknown packet type: 0x%02X", type);
+    break;
   }
 }
 
@@ -778,9 +931,11 @@ void processEspNowRx() {
 static class ServerCB : public BLEServerCallbacks {
   void onConnect(BLEServer*) override {
     deviceConnected = true; bleJustConnected = true;
+    DBG("[BLE] Connected");
   }
   void onDisconnect(BLEServer*) override {
     deviceConnected = false; bleJustDisconnected = true;
+    DBG("[BLE] Disconnected");
   }
 } serverCbInstance;
 
@@ -885,7 +1040,6 @@ void processBleCmd() {
 
     if (lv < 0 || lv > 8) return;
 
-    // ★ F:0 / R:0 = 选档不启动
     if (lv == 0) {
       if (actualPWM > 0 && actualDir != 0 && actualDir != nd) {
         sendError("STOP_FIRST");
@@ -903,7 +1057,6 @@ void processBleCmd() {
       return;
     }
 
-    // lv 1~8
     if (actualPWM > 0 && actualDir != 0 && actualDir != nd) {
       sendError("STOP_FIRST");
       return;
@@ -921,16 +1074,24 @@ void processBleCmd() {
   if (strcmp(cmd,"CP") == 0) {
     if (roleState != ROLE_STANDALONE) { sendError("ALREADY_COUPLED"); return; }
     if (!isFullyStopped()) { sendError("STOP_FIRST"); return; }
+
+    // ★ v1.6: 发邀请前重新固定WiFi信道
+    ensureWifiChannel();
+
     roleState = ROLE_INVITING;
     inviteStartTime = millis(); lastInviteTime = 0;
-    uint8_t bc[6]; memset(bc,0xFF,6); addEspNowPeer(bc);
+    uint8_t bc[6]; memset(bc, 0xFF, 6);
+    addEspNowPeer(bc);
     statusPushRequested = true;
+
+    DBGF("[COUPLE] Inviting started, channel fixed to %d", ESPNOW_CHANNEL);
     return;
   }
   if (strcmp(cmd,"CP:STOP") == 0) {
     if (roleState == ROLE_INVITING) {
       roleState = ROLE_STANDALONE;
       statusPushRequested = true;
+      DBG("[COUPLE] Inviting stopped by user");
     }
     return;
   }
@@ -942,9 +1103,14 @@ void processBleCmd() {
     char end = cmd[2];
     if (end != 'A' && end != 'B') return;
     slaveCoupleEnd = end;
+
+    // ★ v1.6: 接受前确保信道正确
+    ensureWifiChannel();
+
     sendAcceptPkt(inviterMAC, end);
     enterSlave(inviterMAC);
     statusPushRequested = true;
+    DBGF("[COUPLE] Accepted invite, end=%c", end);
     return;
   }
 
@@ -1058,6 +1224,7 @@ void demoStateMachine() {
   targetDir = DEMO_DIR; targetLevel = DEMO_LEVEL; targetPWM = levelToPWM(DEMO_LEVEL);
   startMotor(DEMO_DIR);
   updateSound();
+  DBG("[DEMO] Demo started");
 }
 
 // ============================================================================
@@ -1071,6 +1238,7 @@ void couplingTasks() {
     if (now - inviteStartTime >= ESPNOW_INVITE_TIMEOUT) {
       roleState = ROLE_STANDALONE;
       statusPushRequested = true;
+      DBG("[COUPLE] Invite timeout, back to STANDALONE");
       return;
     }
     if (now - lastInviteTime >= ESPNOW_INVITE_INTERVAL) {
@@ -1082,6 +1250,7 @@ void couplingTasks() {
   if (roleState == ROLE_SLAVE && now - lastSlaveCmd >= SLAVE_CMD_TIMEOUT) {
     targetDir = targetLevel = targetPWM = 0;
     if (actualPWM > 0) { motorState = STATE_RAMPING; lastRampTime = now; }
+    DBG("[COUPLE] Slave cmd timeout, exiting");
     exitCoupling();
     statusPushRequested = true;
     return;
@@ -1092,11 +1261,15 @@ void couplingTasks() {
     if (el >= MASTER_STATUS_TIMEOUT) {
       targetDir = targetLevel = targetPWM = 0;
       if (actualPWM > 0) { motorState = STATE_RAMPING; lastRampTime = now; }
+      DBG("[COUPLE] Slave status timeout, exiting");
       exitCoupling();
       statusPushRequested = true;
       return;
     }
-    if (el >= MASTER_STATUS_WARN && !slaveStatusWarn) slaveStatusWarn = true;
+    if (el >= MASTER_STATUS_WARN && !slaveStatusWarn) {
+      slaveStatusWarn = true;
+      DBG("[COUPLE] Slave status warning");
+    }
   }
 
   if (roleState == ROLE_MASTER && now - lastCmdSendTime >= ESPNOW_CMD_INTERVAL) {
@@ -1114,7 +1287,11 @@ void couplingTasks() {
       lastUncoupleTime = now;
       sendUncouplePkt();
       uncoupleRetryLeft--;
-      if (uncoupleRetryLeft == 0) { exitCoupling(); statusPushRequested = true; }
+      if (uncoupleRetryLeft == 0) {
+        DBG("[COUPLE] Uncouple retries exhausted, force exit");
+        exitCoupling();
+        statusPushRequested = true;
+      }
     }
   }
 }
@@ -1124,6 +1301,7 @@ void couplingTasks() {
 // ============================================================================
 
 void selfTest() {
+  DBG("[BOOT] Self-test starting...");
   for (int i = 0; i < 3; i++) {
     digitalWrite(LED_A_WHITE, HIGH); digitalWrite(LED_B_WHITE, HIGH);
     digitalWrite(LED_A_RED, HIGH);   digitalWrite(LED_B_RED, HIGH);
@@ -1137,6 +1315,7 @@ void selfTest() {
   digitalWrite(SOUND_POWER, HIGH); delay(500); digitalWrite(SOUND_POWER, LOW);
   cabAtEndA = true; headlightOn = false; soundEnabled = false;
   updateLights(); updateSound();
+  DBG("[BOOT] Self-test complete");
 }
 
 // ============================================================================
@@ -1168,17 +1347,31 @@ void setup() {
 
   selfTest();
 
+  // ---- WiFi / ESP-NOW ----
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
-  esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
   esp_read_mac(myMAC, ESP_MAC_WIFI_STA);
   DBGF("[BOOT] MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-    myMAC[0],myMAC[1],myMAC[2],myMAC[3],myMAC[4],myMAC[5]);
+    myMAC[0], myMAC[1], myMAC[2], myMAC[3], myMAC[4], myMAC[5]);
 
-  if (esp_now_init() != ESP_OK) DBG("[BOOT] ESP-NOW FAIL");
+  // ★ v1.6: 验证WiFi信道设置成功
+  {
+    uint8_t primary;
+    wifi_second_chan_t second;
+    esp_wifi_get_channel(&primary, &second);
+    DBGF("[BOOT] WiFi channel: %d (expected %d)", primary, ESPNOW_CHANNEL);
+  }
+
+  if (esp_now_init() != ESP_OK) {
+    DBG("[BOOT] ESP-NOW init FAILED!");
+  } else {
+    DBG("[BOOT] ESP-NOW init OK");
+  }
   esp_now_register_recv_cb(onEspNowRecv);
   esp_now_register_send_cb(onEspNowSent);
 
+  // ---- BLE ----
   BLEDevice::init("BLE_Train");
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(&serverCbInstance);
@@ -1231,6 +1424,13 @@ void loop() {
          (unsigned long)rate, (unsigned long)esp_get_free_heap_size(),
          motorStr(), (int)actualPWM, (int)targetPWM,
          (int)actualDir, (int)targetDir, roleStr());
+
+    // ★ v1.6: ESP-NOW 统计
+    if (espnowTxCount > 0 || espnowRxCount > 0) {
+      DBGF("[ESPNOW] stats: tx=%d txFail=%d rx=%d delivFail=%d",
+           espnowTxCount, espnowTxFail, espnowRxCount, espnowDelivFail);
+    }
+
     loopCounter = 0;
     lastLoopReport = now;
   }
@@ -1247,7 +1447,7 @@ void loop() {
       if (actualPWM > 0) { motorState = STATE_RAMPING; lastRampTime = now; }
       updateSound();
     }
-    lastStatusBuf[0] = '\0';  // 强制首次上报
+    lastStatusBuf[0] = '\0';
     statusPushRequested = true;
   }
 
@@ -1266,7 +1466,6 @@ void loop() {
     bleDisconnectTime = 0;
   }
 
-  // 断连重新广播
   if (wasConnected && !deviceConnected) pServer->startAdvertising();
   wasConnected = deviceConnected;
 
@@ -1284,14 +1483,20 @@ void loop() {
   if (actualPWM != prevActualPWM) {
     updateSound();
     prevActualPWM = actualPWM;
-    statusPushRequested = true;  // PWM 变化 → 上报
+    statusPushRequested = true;
   }
 
   // 电池
   if (now - lastBattTime >= BATT_SAMPLE_INTERVAL) {
     lastBattTime = now;
     sampleBattery();
-    statusPushRequested = true;  // 电池采样 → 上报
+    statusPushRequested = true;
+  }
+
+  // ★ v1.6: 周期性检查WiFi信道 (防BLE连接导致漂移)
+  if (now - lastChannelCheck >= WIFI_CHANNEL_CHECK_INTERVAL) {
+    lastChannelCheck = now;
+    ensureWifiChannel();
   }
 
   // 重联
@@ -1303,13 +1508,11 @@ void loop() {
       errorPushPending = false;
   }
 
-  // ★ 统一上报入口 — 仅在有标志时上报，去重保底
+  // ★ 统一上报入口
   if (statusPushRequested && deviceConnected) {
     sendStatus();
     statusPushRequested = false;
   }
-
-  // ★ 已移除周期上报，完全事件驱动
 
   delay(1);
 }

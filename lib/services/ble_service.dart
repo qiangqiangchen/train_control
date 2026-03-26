@@ -62,29 +62,39 @@ class BleService {
       return false;
     }
   }
-
+  // 修改过滤规则，只选择蓝牙设备以'BLE_Train' 开头的
   Future<Stream<List<ScanResult>>> startScan() async {
-    _setState(BleConnectionState.scanning);
-    try {
-      // 先检查蓝牙状态
-      final available = await isBluetoothAvailable();
-      if (!available) {
-        debugPrint('BLE: Bluetooth not available');
-        _setState(BleConnectionState.disconnected);
-        return FlutterBluePlus.scanResults;
-      }
-
-      await FlutterBluePlus.stopScan();
-      await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 15),
-        withNames: [BleConstants.deviceNameFilter],
-      );
-    } catch (e) {
-      debugPrint('Scan error: $e');
+  _setState(BleConnectionState.scanning);
+  try {
+    final available = await isBluetoothAvailable();
+    if (!available) {
       _setState(BleConnectionState.disconnected);
+      return FlutterBluePlus.scanResults;
     }
-    return FlutterBluePlus.scanResults;
+
+    await FlutterBluePlus.stopScan();
+
+    // 1. 启动扫描时不要传入 withNames，否则只会找名字完全等于 "BLE_Train" 的设备
+    await FlutterBluePlus.startScan(
+      timeout: const Duration(seconds: 15),
+      // 如果你想提高效率，可以保留 Service UUID 过滤，但名字过滤在这里要去掉
+    );
+
+  } catch (e) {
+    debugPrint('Scan error: $e');
+    _setState(BleConnectionState.disconnected);
   }
+
+  // 2. 返回一个经过过滤的 Stream
+  return FlutterBluePlus.scanResults.map((results) {
+    return results.where((r) {
+      // 检查设备名称是否以指定字符串开头
+      // 注意：有些设备名称可能为空，需要处理 null
+      return r.advertisementData.advName.startsWith(BleConstants.deviceNameFilter) ||
+             r.device.platformName.startsWith(BleConstants.deviceNameFilter);
+    }).toList();
+  });
+}
 
   Future<void> stopScan() async {
     try {
